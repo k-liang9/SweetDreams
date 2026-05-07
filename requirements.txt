@@ -1,0 +1,6 @@
+torch
+gymnasium[atari]
+ale-py
+h5py
+opencv-python
+autorom
