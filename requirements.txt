@@ -4,3 +4,5 @@ ale-py
 h5py
 opencv-python
 autorom
+wandb
+tqdm
