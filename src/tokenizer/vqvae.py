@@ -1,15 +1,15 @@
 import torch
 import torch.nn as nn
-from torch.nn import functional as F
-import wandb
 from common.base import Model as Base
+from tokenizer.losses import vqvae_loss
+from tokenizer.metrics import vqvae_metrics
 
 class Encoder(nn.Module):
     def __init__(self, cfg):
         super().__init__()
-        in_channels = cfg.params.in_out_channels
-        hidden_dim = cfg.params.hidden_dim
-        latent_dim = cfg.params.latent_dim
+        in_channels = cfg.model.in_out_channels
+        hidden_dim = cfg.model.hidden_dim
+        latent_dim = cfg.model.latent_dim
         self.net = nn.Sequential(
             nn.Conv2d(in_channels, hidden_dim, kernel_size=4, stride=2, padding=1), # 64 -> 32
             nn.BatchNorm2d(hidden_dim),
@@ -29,9 +29,8 @@ class Encoder(nn.Module):
 class VectorQuantizer(nn.Module):
     def __init__(self, cfg):
         super().__init__()
-        self.K = cfg.params.num_embeddings
-        self.D = cfg.params.embedding_dim
-        self.commitment_cost = cfg.params.commitment_cost
+        self.K = cfg.model.num_embeddings
+        self.D = cfg.model.embedding_dim
         
         self.embedding = nn.Embedding(self.K, self.D)
         nn.init.uniform_(self.embedding.weight, -1/self.K, 1/self.K)
@@ -50,23 +49,19 @@ class VectorQuantizer(nn.Module):
         # find nearest codebook entry
         indices = distances.argmin(1) # (B*H*W,)
         z_q = self.embedding(indices).reshape(B, H, W, D).permute(0, 3, 1, 2) # (B, D, H, W)
-        
-        # losses
-        codebook_loss = (z_q - z.detach()).pow(2).mean() # moves codebook toward encoder
-        commitment_loss = (z - z_q.detach()).pow(2).mean() # moves encoder toward codebook
-        loss = codebook_loss + self.commitment_cost * commitment_loss
+        z_q_raw = z_q
         
         # straight-through estimator: lets gradient flow thru nondifferentiable argmin
         z_q = z + (z_q - z).detach()
         
-        return z_q, indices.reshape(B, H, W), loss, codebook_loss, commitment_loss
+        return z_q, indices.reshape(B, H, W), z_q_raw
 
 class Decoder(nn.Module):
     def __init__(self, cfg):
         super().__init__()
-        out_channels = cfg.params.in_out_channels
-        hidden_dim = cfg.params.hidden_dim
-        latent_dim = cfg.params.latent_dim
+        out_channels = cfg.model.in_out_channels
+        hidden_dim = cfg.model.hidden_dim
+        latent_dim = cfg.model.latent_dim
         self.net = nn.Sequential(
             nn.ConvTranspose2d(latent_dim, hidden_dim, kernel_size=4, stride=2, padding=1),  # 4 → 8
             nn.BatchNorm2d(hidden_dim),
@@ -90,6 +85,7 @@ class VQVAE(Base):
         self.encoder =      Encoder(cfg)
         self.quantizer =    VectorQuantizer(cfg)
         self.decoder =      Decoder(cfg)
+        self.commitment_cost = cfg.model.commitment_cost
         
     def featurize(self, batch):
         frames = batch[0] if isinstance(batch, (tuple, list)) else batch
@@ -103,69 +99,30 @@ class VQVAE(Base):
             target = x
         
         z = self.encoder(x)
-        z_q, indices, vq_loss, codebook_loss, commitment_loss = self.quantizer(z)
+        z_q, indices, z_q_raw = self.quantizer(z)
         pred = self.decoder(z_q)
-        recon_loss = F.mse_loss(pred, target)
+        loss_dict = vqvae_loss(pred, target, z, z_q_raw, self.commitment_cost)
         return {
             'pred': pred,
             'indices': indices,
-            'recon_loss': recon_loss,
-            'vq_loss': vq_loss,
-            'codebook_loss': codebook_loss,
-            'commitment_loss': commitment_loss,
-            'loss': recon_loss + vq_loss,
+            **loss_dict,
         }
     
     def encode(self, x):
         # at inference - only token indices
         z = self.encoder(x)
-        _, indices, _, _, _ = self.quantizer(z)
+        _, indices, _ = self.quantizer(z)
         return indices # (B, 4, 4)
     
     def decode_from_indices(self, indices):
         z_q = self.quantizer.embedding(indices).permute(0, 3, 1, 2)
         return self.decoder(z_q)
     
-    def _codebook_metrics(self, indices):
-        counts = torch.bincount(indices.reshape(-1), minlength=self.quantizer.K).float()
-        probs = counts / counts.sum().clamp_min(1)
-        used = counts.gt(0).float().sum()
-        nonzero_probs = probs[probs.gt(0)]
-        perplexity = torch.exp(-(nonzero_probs * nonzero_probs.log()).sum())
-        return used / self.quantizer.K, perplexity
-    
-    def _reconstruction_grid(self, pred, target, n=8):
-        n = min(n, pred.shape[0], target.shape[0])
-        originals = target[:n].detach().cpu().clamp(0, 1)
-        reconstructions = pred[:n].detach().cpu().clamp(0, 1)
-        grid = torch.cat([originals, reconstructions], dim=0)
-        C, H, W = grid.shape[1:]
-        grid = grid.reshape(2, n, C, H, W).permute(0, 3, 1, 4, 2)
-        grid = grid.reshape(2 * H, n * W, C)
-        if C == 1:
-            grid = grid.squeeze(-1)
-        try:
-            return wandb.Image(grid.numpy())
-        except wandb.Error:
-            return None
-    
     def compute_metrics(self, split, out, x, target):
-        codebook_utilization, codebook_perplexity = self._codebook_metrics(out['indices'])
-        metrics = {
-            f'{split}/loss': out['loss'],
-            f'{split}/recon_loss': out['recon_loss'],
-            f'{split}/vq_loss': out['vq_loss'],
-            f'{split}/codebook_utilization': codebook_utilization,
-            f'{split}/codebook_perplexity': codebook_perplexity,
-        }
-        
-        if 'codebook_loss' in out:
-            metrics[f'{split}/codebook_loss'] = out['codebook_loss']
-        if 'commitment_loss' in out:
-            metrics[f'{split}/commitment_loss'] = out['commitment_loss']
-        if split == 'test':
-            reconstruction_grid = self._reconstruction_grid(out['pred'], target)
-            if reconstruction_grid is not None:
-                metrics[f'{split}/reconstructions'] = reconstruction_grid
-        
-        return metrics
+        return vqvae_metrics(
+            split,
+            out,
+            target,
+            num_embeddings=self.quantizer.K,
+            include_reconstructions=split == 'test',
+        )

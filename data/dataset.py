@@ -11,8 +11,8 @@ class AtariEpisodeDataset(Dataset):
         
         self.index = []
         for ep_key in self.file.keys():
-            n_frames = len(self.f[ep_key]['frames'])
-            for start in range(n_frames - seq_len):
+            n_frames = len(self.file[ep_key]['frames'])
+            for start in range(n_frames - seq_len + 1):
                 self.index.append((ep_key, start))
                 
     def __len__(self):

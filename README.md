@@ -18,8 +18,7 @@ atari-world-model/
 ├── src/
 │   ├── __init__.py
 │   ├── tokenizer/
-│   │   ├── vqvae.py          # encoder, decoder, codebook
-│   │   └── losses.py         # commitment loss, reconstruction loss
+│   │   └── vqvae.py          # encoder, decoder, codebook
 │   ├── world_model/
 │   │   ├── transformer.py    # GPT-style architecture
 │   │   ├── embeddings.py     # token + action + positional embeddings

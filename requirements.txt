@@ -7,3 +7,5 @@ autorom
 wandb
 tqdm
 pillow
+hydra-core
+omegaconf

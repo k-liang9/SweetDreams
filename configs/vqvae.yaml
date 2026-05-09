@@ -1,13 +1,33 @@
 exp:
-  project:
-  run_name: 
+  project: sweetdreams
+  run_name: vqvae
+  group: vqvae
 
-params:
-  lr: 0.001
+data:
+  h5_path: data/breakout.h5
+  seq_len: 16
+  train_frac: 0.8
+  val_frac: 0.1
+
+train:
   seed: 0
   epochs: 100
-  batch: 64
-  # vqvae params
+  batch_size: 64
+  num_workers: 4
+  device: auto
+  log_every: 100
+  limit_train_batches:
+  limit_val_batches:
+  limit_test_batches:
+
+optimizer:
+  type: adam
+  lr: 0.001
+
+scheduler:
+  type: none
+
+model:
   in_out_channels: 1
   hidden_dim: 128
   latent_dim: 256
