@@ -6,6 +6,7 @@ params:
   lr: 0.001
   seed: 0
   epochs: 100
+  batch: 64
   # vqvae params
   in_out_channels: 1
   hidden_dim: 128
