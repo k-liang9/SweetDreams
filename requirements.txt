@@ -10,3 +10,4 @@ tqdm
 pillow
 hydra-core
 omegaconf
+matplotlib

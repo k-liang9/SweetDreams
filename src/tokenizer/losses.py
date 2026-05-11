@@ -8,7 +8,7 @@ def reconstruction_loss(pred, target):
 def vector_quantization_loss(z, z_q, commitment_cost):
     codebook_loss = F.mse_loss(z_q, z.detach())
     commitment_loss = F.mse_loss(z, z_q.detach())
-    vq_loss = codebook_loss + commitment_cost * commitment_loss
+    vq_loss = commitment_cost * commitment_loss
     return {
         'vq_loss': vq_loss,
         'codebook_loss': codebook_loss,
