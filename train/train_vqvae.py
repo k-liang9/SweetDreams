@@ -107,7 +107,13 @@ def main(cfg: DictConfig):
     scheduler = build_scheduler(optimizer, cfg.scheduler)
 
     wandb_config = OmegaConf.to_container(cfg, resolve=True)
-    with wandb.init(project=cfg.exp.project, name=cfg.exp.run_name, group=cfg.exp.get('group'), config=wandb_config) as run:
+    with wandb.init(
+        project=cfg.exp.project, 
+        name=cfg.exp.run_name, 
+        group=cfg.exp.group, 
+        entity=cfg.exp.entity, 
+        config=wandb_config
+    ) as run:
         best_model_state = None
         step = 0
 

@@ -1,7 +1,8 @@
 exp:
+  entity: kliang-personal
   project: sweetdreams
-  run_name: vqvae
   group: vqvae
+  run_name: vqvae
 
 data:
   h5_path: data/breakout.h5
