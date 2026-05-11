@@ -71,8 +71,10 @@ def run_epoch(model, loader, split, device, optimizer=None, log_every=None, run=
         if max_batches is not None and batch_idx >= max_batches:
             break
 
-        batch = move_to_device(batch, device)
         x, target = model.featurize(batch)
+        target_is_x = target is x
+        x = move_to_device(x, device)
+        target = x if target_is_x else move_to_device(target, device)
 
         with torch.set_grad_enabled(is_train):
             out = model(x, target)
@@ -82,11 +84,21 @@ def run_epoch(model, loader, split, device, optimizer=None, log_every=None, run=
                 optimizer.step()
                 step += 1
 
-        metrics = model.compute_metrics(split, out, x, target)
         if is_train:
-            if run is not None and (log_every is None or step % log_every == 0):
+            should_log = run is not None and (log_every is None or step % log_every == 0)
+            if should_log:
+                metrics = model.compute_metrics(split, out, x, target)
                 run.log(prepare_metrics_for_log(metrics), step=step)
         else:
+            include_reconstructions = split == 'test' and not metrics_list
+            metrics = model.compute_metrics(
+                split,
+                out,
+                x,
+                target,
+                include_reconstructions=include_reconstructions,
+                reconstruction_examples=1,
+            )
             metrics_list.append(metrics)
 
     if not is_train:

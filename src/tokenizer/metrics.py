@@ -11,7 +11,7 @@ def codebook_metrics(indices, num_embeddings):
     return used / num_embeddings, perplexity
 
 
-def reconstruction_grid(pred, target, n=8):
+def reconstruction_grid(pred, target, n=1):
     n = min(n, pred.shape[0], target.shape[0])
     originals = target[:n].detach().cpu().clamp(0, 1)
     reconstructions = pred[:n].detach().cpu().clamp(0, 1)
@@ -28,7 +28,14 @@ def reconstruction_grid(pred, target, n=8):
         return None
 
 
-def vqvae_metrics(split, out, target, num_embeddings, include_reconstructions=False):
+def vqvae_metrics(
+    split,
+    out,
+    target,
+    num_embeddings,
+    include_reconstructions=False,
+    reconstruction_examples=1,
+):
     codebook_utilization, codebook_perplexity = codebook_metrics(out['indices'], num_embeddings)
     metrics = {
         f'{split}/loss': out['loss'],
@@ -41,7 +48,7 @@ def vqvae_metrics(split, out, target, num_embeddings, include_reconstructions=Fa
     }
 
     if include_reconstructions:
-        image_grid = reconstruction_grid(out['pred'], target)
+        image_grid = reconstruction_grid(out['pred'], target, n=reconstruction_examples)
         if image_grid is not None:
             metrics[f'{split}/reconstructions'] = image_grid
 

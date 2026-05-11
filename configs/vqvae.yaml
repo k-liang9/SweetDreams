@@ -2,21 +2,21 @@ exp:
   entity: kliang-personal
   project: sweetdreams
   group: vqvae
-  run_name: vqvae
+  run_name: run_1
 
 data:
   h5_path: data/breakout.h5
-  seq_len: 16
+  seq_len: 1
   train_frac: 0.8
   val_frac: 0.1
 
 train:
   seed: 0
   epochs: 100
-  batch_size: 64
+  batch_size: 512
   num_workers: 4
   device: auto
-  log_every: 100
+  log_every: 64
   limit_train_batches:
   limit_val_batches:
   limit_test_batches:

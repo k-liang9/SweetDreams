@@ -118,11 +118,23 @@ class VQVAE(Base):
         z_q = self.quantizer.embedding(indices).permute(0, 3, 1, 2)
         return self.decoder(z_q)
     
-    def compute_metrics(self, split, out, x, target):
+    def compute_metrics(
+        self,
+        split,
+        out,
+        x,
+        target,
+        include_reconstructions=None,
+        reconstruction_examples=1,
+    ):
+        if include_reconstructions is None:
+            include_reconstructions = split == 'test'
+
         return vqvae_metrics(
             split,
             out,
             target,
             num_embeddings=self.quantizer.K,
-            include_reconstructions=split == 'test',
+            include_reconstructions=include_reconstructions,
+            reconstruction_examples=reconstruction_examples,
         )
