@@ -2,7 +2,7 @@ exp:
   entity: kliang-personal
   project: sweetdreams
   group: vqvae_lr
-  run_name: kmeans_init
+  run_name: layernorm
 
 data:
   h5_path: data/breakout.h5

@@ -13,13 +13,13 @@ class Encoder(nn.Module):
         latent_dim = cfg.model.latent_dim
         self.net = nn.Sequential(
             nn.Conv2d(in_channels, hidden_dim, kernel_size=4, stride=2, padding=1), # 64 -> 32
-            nn.BatchNorm2d(hidden_dim),
+            nn.LayerNorm([hidden_dim, 32, 32]),
             nn.ReLU(),
             nn.Conv2d(hidden_dim, hidden_dim, kernel_size=4, stride=2, padding=1), # 32 -> 16
-            nn.BatchNorm2d(hidden_dim),
+            nn.LayerNorm([hidden_dim, 16, 16]),
             nn.ReLU(),
             nn.Conv2d(hidden_dim, hidden_dim, kernel_size=4, stride=2, padding=1), # 16 -> 8
-            nn.BatchNorm2d(hidden_dim),
+            nn.LayerNorm([hidden_dim, 8, 8]),
             nn.ReLU(),
             nn.Conv2d(hidden_dim, latent_dim, kernel_size=4, stride=2, padding=1), # 8 -> 4
         )
@@ -70,13 +70,13 @@ class Decoder(nn.Module):
         latent_dim = cfg.model.latent_dim
         self.net = nn.Sequential(
             nn.ConvTranspose2d(latent_dim, hidden_dim, kernel_size=4, stride=2, padding=1),  # 4 → 8
-            nn.BatchNorm2d(hidden_dim),
+            nn.LayerNorm([hidden_dim, 8, 8]),
             nn.ReLU(),
             nn.ConvTranspose2d(hidden_dim, hidden_dim, kernel_size=4, stride=2, padding=1),  # 8 → 16
-            nn.BatchNorm2d(hidden_dim),
+            nn.LayerNorm([hidden_dim, 16, 16]),
             nn.ReLU(),
             nn.ConvTranspose2d(hidden_dim, hidden_dim, kernel_size=4, stride=2, padding=1),  # 16 → 32
-            nn.BatchNorm2d(hidden_dim),
+            nn.LayerNorm([hidden_dim, 32, 32]),
             nn.ReLU(),
             nn.ConvTranspose2d(hidden_dim, out_channels, kernel_size=4, stride=2, padding=1), # 32 → 64
             nn.Sigmoid()  # output in [0, 1] to match normalized frames
