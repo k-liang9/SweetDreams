@@ -1,8 +1,8 @@
 exp:
   entity: kliang-personal
   project: sweetdreams
-  group: vqvae_lr
-  run_name: ema + random restart
+  group: vqvae
+  run_name: vqvae
 
 data:
   h5_path: data/breakout.h5
@@ -27,20 +27,19 @@ optimizer:
 scheduler:
   type: none
 
-codebook:
-  init:
-    type: kmeans
-    num_batches: 10
-    num_iters: 20
-    chunk_size: 65536
-  ema:
-    decay: 0.99
-    eps: 1e-5
-    restart_threshold: 1.0
-
 model:
   in_out_channels: 1
   hidden_dim: 128
   latent_dim: 256
-  num_embeddings: 128
-  commitment_cost: 0.25
+  codebook:
+    num_embeddings: 128
+    commitment_cost: 0.25
+    init:
+      type: kmeans
+      num_batches: 10
+      num_iters: 20
+      chunk_size: 65536
+    ema:
+      decay: 0.99
+      eps: 1e-5
+      restart_threshold: 1.0

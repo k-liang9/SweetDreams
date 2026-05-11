@@ -30,11 +30,11 @@ class Encoder(nn.Module):
 class VectorQuantizer(nn.Module):
     def __init__(self, cfg):
         super().__init__()
-        self.K = cfg.model.num_embeddings
+        self.K = cfg.model.codebook.num_embeddings
         self.D = cfg.model.latent_dim
-        self.decay = cfg.codebook.ema.decay
-        self.eps = cfg.codebook.ema.eps
-        self.restart_threshold = cfg.codebook.ema.restart_threshold
+        self.decay = cfg.model.codebook.ema.decay
+        self.eps = cfg.model.codebook.ema.eps
+        self.restart_threshold = cfg.model.codebook.ema.restart_threshold
 
         self.embedding = nn.Embedding(self.K, self.D)
         nn.init.uniform_(self.embedding.weight, -1/self.K, 1/self.K)
@@ -133,7 +133,7 @@ class VQVAE(Base):
         self.encoder =      Encoder(cfg)
         self.quantizer =    VectorQuantizer(cfg)
         self.decoder =      Decoder(cfg)
-        self.commitment_cost = cfg.model.commitment_cost
+        self.commitment_cost = cfg.model.codebook.commitment_cost
         
     def featurize(self, batch):
         frames = batch[0] if isinstance(batch, (tuple, list)) else batch

@@ -92,7 +92,7 @@ def collect_encoder_vectors(model, loader, device, num_batches):
 
     model.train(was_training)
     if not vectors:
-        raise ValueError('Need codebook.init.num_batches > 0 for k-means init')
+        raise ValueError('Need model.codebook.init.num_batches > 0 for k-means init')
     return torch.cat(vectors, dim=0)
 
 
@@ -111,24 +111,24 @@ def init_codebook_kmeans(model, loader, device, cfg):
         model,
         loader,
         device,
-        num_batches=cfg.codebook.init.num_batches,
+        num_batches=cfg.model.codebook.init.num_batches,
     )
 
     num_embeddings = model.quantizer.K
     if vectors.shape[0] < num_embeddings:
         raise ValueError(
             f'Need at least {num_embeddings} encoder vectors for k-means init, '
-            f'but only collected {vectors.shape[0]}. Increase codebook.init.num_batches.'
+            f'but only collected {vectors.shape[0]}. Increase model.codebook.init.num_batches.'
         )
 
     indices = torch.randperm(vectors.shape[0], device=vectors.device)[:num_embeddings]
     centroids = vectors[indices].clone()
 
-    for _ in tqdm.tqdm(range(cfg.codebook.init.num_iters), desc='k-means init iterations'):
+    for _ in tqdm.tqdm(range(cfg.model.codebook.init.num_iters), desc='k-means init iterations'):
         assignments = nearest_centroids(
             vectors,
             centroids,
-            chunk_size=cfg.codebook.init.chunk_size,
+            chunk_size=cfg.model.codebook.init.chunk_size,
         )
         for code_idx in range(num_embeddings):
             members = vectors[assignments == code_idx]
@@ -209,10 +209,10 @@ def main(cfg: DictConfig):
 
     train_loader, val_loader, test_loader = make_loaders(cfg)
     model = VQVAE(cfg).to(device)
-    if cfg.codebook.init.type == 'kmeans':
+    if cfg.model.codebook.init.type == 'kmeans':
         init_codebook_kmeans(model, train_loader, device, cfg)
-    elif cfg.codebook.init.type != 'random':
-        raise ValueError(f'Unsupported codebook init type: {cfg.codebook.init.type}')
+    elif cfg.model.codebook.init.type != 'random':
+        raise ValueError(f'Unsupported codebook init type: {cfg.model.codebook.init.type}')
 
     if cfg.optimizer.type != 'adam':
         raise ValueError(f'Unsupported optimizer type: {cfg.optimizer.type}')
