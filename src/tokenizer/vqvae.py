@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from torch.nn import functional as F
 from common.base import Model as Base
 from tokenizer.losses import vqvae_loss
 from tokenizer.metrics import vqvae_metrics
@@ -34,21 +35,26 @@ class VectorQuantizer(nn.Module):
         
         self.embedding = nn.Embedding(self.K, self.D)
         nn.init.uniform_(self.embedding.weight, -1/self.K, 1/self.K)
-        
+
+    def normalized_embedding(self):
+        return F.normalize(self.embedding.weight, p=2, dim=1)
+
     def forward(self, z):
         # z: (B, D, H, W) -> rearrange to (B*H*W, D)
+        z = F.normalize(z, p=2, dim=1)
+        embedding = self.normalized_embedding()
         B, D, H, W = z.shape
         z_flat = z.permute(0, 2, 3, 1).reshape(-1, D) # (B*H*W, D)
         
         distances = (
             z_flat.pow(2).sum(1, keepdim=True)
-            - 2* z_flat @ self.embedding.weight.T
-            + self.embedding.weight.pow(2).sum(1)
+            - 2* z_flat @ embedding.T
+            + embedding.pow(2).sum(1)
         ) # (B*H*W, K)
         
         # find nearest codebook entry
         indices = distances.argmin(1) # (B*H*W,)
-        z_q = self.embedding(indices).reshape(B, H, W, D).permute(0, 3, 1, 2) # (B, D, H, W)
+        z_q = embedding[indices].reshape(B, H, W, D).permute(0, 3, 1, 2) # (B, D, H, W)
         z_q_raw = z_q
         
         # straight-through estimator: lets gradient flow thru nondifferentiable argmin
@@ -98,7 +104,7 @@ class VQVAE(Base):
         if target is None:
             target = x
         
-        z = self.encoder(x)
+        z = F.normalize(self.encoder(x), p=2, dim=1)
         z_q, indices, z_q_raw = self.quantizer(z)
         pred = self.decoder(z_q)
         loss_dict = vqvae_loss(pred, target, z, z_q_raw, self.commitment_cost)
@@ -110,12 +116,12 @@ class VQVAE(Base):
     
     def encode(self, x):
         # at inference - only token indices
-        z = self.encoder(x)
+        z = F.normalize(self.encoder(x), p=2, dim=1)
         _, indices, _ = self.quantizer(z)
         return indices # (B, 4, 4)
     
     def decode_from_indices(self, indices):
-        z_q = self.quantizer.embedding(indices).permute(0, 3, 1, 2)
+        z_q = self.quantizer.normalized_embedding()[indices].permute(0, 3, 1, 2)
         return self.decoder(z_q)
     
     def compute_metrics(

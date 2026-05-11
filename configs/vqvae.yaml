@@ -2,7 +2,7 @@ exp:
   entity: kliang-personal
   project: sweetdreams
   group: vqvae_lr
-  run_name: vqvae
+  run_name: kmeans_init
 
 data:
   h5_path: data/breakout.h5
@@ -27,9 +27,15 @@ optimizer:
 scheduler:
   type: none
 
+codebook_init:
+  type: kmeans
+  num_batches: 10
+  num_iters: 20
+  chunk_size: 65536
+
 model:
   in_out_channels: 1
   hidden_dim: 128
-  latent_dim: 128
+  latent_dim: 256
   num_embeddings: 128
-  commitment_cost: 0.25
+  commitment_cost: 0.15

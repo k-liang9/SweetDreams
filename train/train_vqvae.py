@@ -12,6 +12,7 @@ import torch
 from hydra.utils import to_absolute_path
 from omegaconf import DictConfig, OmegaConf
 from torch import optim
+from torch.nn import functional as F
 from torch.utils.data import DataLoader, random_split
 from torchmetrics.image.fid import FrechetInceptionDistance
 import tqdm
@@ -69,6 +70,75 @@ def fid_images(images):
     if images.shape[1] == 1:
         images = images.repeat(1, 3, 1, 1)
     return images
+
+
+@torch.no_grad()
+def collect_encoder_vectors(model, loader, device, num_batches):
+    was_training = model.training
+    model.eval()
+    vectors = []
+    total = min(len(loader), num_batches)
+
+    for batch_idx, batch in enumerate(tqdm.tqdm(loader, total=total, desc='k-means init batches')):
+        if batch_idx >= num_batches:
+            break
+
+        x, _ = model.featurize(batch)
+        x = move_to_device(x, device)
+        z = model.encoder(x)
+        z = F.normalize(z, p=2, dim=1)
+        z = z.permute(0, 2, 3, 1).reshape(-1, z.shape[1])
+        vectors.append(z)
+
+    model.train(was_training)
+    if not vectors:
+        raise ValueError('Need codebook_init.num_batches > 0 for k-means init')
+    return torch.cat(vectors, dim=0)
+
+
+def nearest_centroids(vectors, centroids, chunk_size):
+    assignments = []
+    for start in range(0, vectors.shape[0], chunk_size):
+        chunk = vectors[start:start + chunk_size]
+        distances = torch.cdist(chunk, centroids)
+        assignments.append(distances.argmin(dim=1))
+    return torch.cat(assignments, dim=0)
+
+
+@torch.no_grad()
+def init_codebook_kmeans(model, loader, device, cfg):
+    vectors = collect_encoder_vectors(
+        model,
+        loader,
+        device,
+        num_batches=cfg.codebook_init.num_batches,
+    )
+
+    num_embeddings = model.quantizer.K
+    if vectors.shape[0] < num_embeddings:
+        raise ValueError(
+            f'Need at least {num_embeddings} encoder vectors for k-means init, '
+            f'but only collected {vectors.shape[0]}. Increase codebook_init.num_batches.'
+        )
+
+    indices = torch.randperm(vectors.shape[0], device=vectors.device)[:num_embeddings]
+    centroids = vectors[indices].clone()
+
+    for _ in tqdm.tqdm(range(cfg.codebook_init.num_iters), desc='k-means init iterations'):
+        assignments = nearest_centroids(
+            vectors,
+            centroids,
+            chunk_size=cfg.codebook_init.chunk_size,
+        )
+        for code_idx in range(num_embeddings):
+            members = vectors[assignments == code_idx]
+            if len(members) > 0:
+                centroids[code_idx] = F.normalize(members.mean(dim=0), p=2, dim=0)
+            else:
+                replacement_idx = torch.randint(vectors.shape[0], (1,), device=vectors.device).item()
+                centroids[code_idx] = vectors[replacement_idx]
+
+    model.quantizer.embedding.weight.copy_(F.normalize(centroids, p=2, dim=1))
 
 
 def run_epoch(
@@ -138,6 +208,11 @@ def main(cfg: DictConfig):
 
     train_loader, val_loader, test_loader = make_loaders(cfg)
     model = VQVAE(cfg).to(device)
+    if cfg.codebook_init.type == 'kmeans':
+        init_codebook_kmeans(model, train_loader, device, cfg)
+    elif cfg.codebook_init.type != 'random':
+        raise ValueError(f'Unsupported codebook init type: {cfg.codebook_init.type}')
+
     if cfg.optimizer.type != 'adam':
         raise ValueError(f'Unsupported optimizer type: {cfg.optimizer.type}')
     optimizer = optim.Adam(model.parameters(), lr=cfg.optimizer.lr)
