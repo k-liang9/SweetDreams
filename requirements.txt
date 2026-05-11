@@ -1,4 +1,5 @@
 torch
+torchmetrics[image]
 gymnasium[atari]
 ale-py
 h5py

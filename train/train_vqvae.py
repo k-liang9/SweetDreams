@@ -13,6 +13,7 @@ from hydra.utils import to_absolute_path
 from omegaconf import DictConfig, OmegaConf
 from torch import optim
 from torch.utils.data import DataLoader, random_split
+from torchmetrics.image.fid import FrechetInceptionDistance
 import tqdm
 import wandb
 
@@ -28,6 +29,9 @@ from common.train_utils import (
 )
 from data import AtariEpisodeDataset
 from tokenizer import VQVAE
+
+
+VAL_RECONSTRUCTION_EVERY_STEPS = 500
 
 
 def make_loaders(cfg):
@@ -60,7 +64,25 @@ def make_loaders(cfg):
     return train_loader, val_loader, test_loader
 
 
-def run_epoch(model, loader, split, device, optimizer=None, log_every=None, run=None, step=0, max_batches=None):
+def fid_images(images):
+    images = images.detach().clamp(0, 1)
+    if images.shape[1] == 1:
+        images = images.repeat(1, 3, 1, 1)
+    return images
+
+
+def run_epoch(
+    model,
+    loader,
+    split,
+    device,
+    optimizer=None,
+    run=None,
+    step=0,
+    max_batches=None,
+    include_reconstructions=False,
+    fid=None,
+):
     is_train = optimizer is not None
     model.train(is_train)
     metrics_list = []
@@ -85,24 +107,27 @@ def run_epoch(model, loader, split, device, optimizer=None, log_every=None, run=
                 step += 1
 
         if is_train:
-            should_log = run is not None and (log_every is None or step % log_every == 0)
-            if should_log:
-                metrics = model.compute_metrics(split, out, x, target)
-                run.log(prepare_metrics_for_log(metrics), step=step)
+            metrics = model.compute_metrics(split, out, x, target)
+            run.log(prepare_metrics_for_log(metrics), step=step)
         else:
-            include_reconstructions = split == 'test' and not metrics_list
             metrics = model.compute_metrics(
                 split,
                 out,
                 x,
                 target,
-                include_reconstructions=include_reconstructions,
+                include_reconstructions=include_reconstructions and not metrics_list,
                 reconstruction_examples=1,
             )
+            if fid is not None:
+                fid.update(fid_images(target), real=True)
+                fid.update(fid_images(out['pred']), real=False)
             metrics_list.append(metrics)
 
     if not is_train:
-        return aggregate_metrics(metrics_list), step
+        metrics = aggregate_metrics(metrics_list)
+        if fid is not None:
+            metrics[f'{split}/fid'] = fid.compute()
+        return metrics, step
     return {}, step
 
 
@@ -120,27 +145,31 @@ def main(cfg: DictConfig):
 
     wandb_config = OmegaConf.to_container(cfg, resolve=True)
     with wandb.init(
-        project=cfg.exp.project, 
-        name=cfg.exp.run_name, 
-        group=cfg.exp.group, 
-        entity=cfg.exp.entity, 
+        project=str(cfg.exp.project),
+        name=str(cfg.exp.run_name),
+        group=str(cfg.exp.group),
+        entity=str(cfg.exp.entity),
         config=wandb_config
     ) as run:
         best_model_state = None
         step = 0
+        next_val_reconstruction_step = VAL_RECONSTRUCTION_EVERY_STEPS
 
-        for epoch in range(cfg.train.epochs):
+        for epoch in range(1, cfg.train.epochs + 1):
             _, step = run_epoch(
                 model,
                 train_loader,
                 'train',
                 device,
                 optimizer=optimizer,
-                log_every=cfg.train.log_every,
                 run=run,
                 step=step,
                 max_batches=cfg.train.limit_train_batches,
             )
+
+            include_val_reconstructions = step >= next_val_reconstruction_step
+            while step >= next_val_reconstruction_step:
+                next_val_reconstruction_step += VAL_RECONSTRUCTION_EVERY_STEPS
 
             with torch.no_grad():
                 val_metrics, step = run_epoch(
@@ -150,10 +179,11 @@ def main(cfg: DictConfig):
                     device,
                     step=step,
                     max_batches=cfg.train.limit_val_batches,
+                    include_reconstructions=include_val_reconstructions,
                 )
             run.log(prepare_metrics_for_log(val_metrics), step=step)
 
-            val_loss = val_metrics.get('val/loss')
+            val_loss = val_metrics.get('val/recon_loss')
             if torch.is_tensor(val_loss):
                 val_loss = val_loss.item()
             if val_loss is not None and (best_model_state is None or val_loss < best_model_state['val_loss']):
@@ -166,6 +196,7 @@ def main(cfg: DictConfig):
             checkpoint_path = Path(run.dir) / 'best_model.pt'
             save_checkpoint(best_model_state, checkpoint_path)
 
+        fid = FrechetInceptionDistance(normalize=True).to(device)
         with torch.no_grad():
             test_metrics, step = run_epoch(
                 model,
@@ -174,6 +205,8 @@ def main(cfg: DictConfig):
                 device,
                 step=step,
                 max_batches=cfg.train.limit_test_batches,
+                include_reconstructions=True,
+                fid=fid,
             )
         run.log(prepare_metrics_for_log(test_metrics), step=step)
 

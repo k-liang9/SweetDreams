@@ -30,7 +30,7 @@ class VectorQuantizer(nn.Module):
     def __init__(self, cfg):
         super().__init__()
         self.K = cfg.model.num_embeddings
-        self.D = cfg.model.embedding_dim
+        self.D = cfg.model.latent_dim
         
         self.embedding = nn.Embedding(self.K, self.D)
         nn.init.uniform_(self.embedding.weight, -1/self.K, 1/self.K)
@@ -124,12 +124,9 @@ class VQVAE(Base):
         out,
         x,
         target,
-        include_reconstructions=None,
+        include_reconstructions=False,
         reconstruction_examples=1,
     ):
-        if include_reconstructions is None:
-            include_reconstructions = split == 'test'
-
         return vqvae_metrics(
             split,
             out,

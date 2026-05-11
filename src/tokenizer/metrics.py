@@ -22,10 +22,9 @@ def reconstruction_grid(pred, target, n=1):
     if C == 1:
         grid = grid.squeeze(-1)
 
-    try:
-        return wandb.Image(grid.numpy())
-    except wandb.Error:
+    if not hasattr(wandb, 'Image'):
         return None
+    return wandb.Image(grid.numpy())
 
 
 def vqvae_metrics(
@@ -37,15 +36,20 @@ def vqvae_metrics(
     reconstruction_examples=1,
 ):
     codebook_utilization, codebook_perplexity = codebook_metrics(out['indices'], num_embeddings)
-    metrics = {
-        f'{split}/loss': out['loss'],
-        f'{split}/recon_loss': out['recon_loss'],
-        f'{split}/vq_loss': out['vq_loss'],
-        f'{split}/codebook_loss': out['codebook_loss'],
-        f'{split}/commitment_loss': out['commitment_loss'],
-        f'{split}/codebook_utilization': codebook_utilization,
-        f'{split}/codebook_perplexity': codebook_perplexity,
-    }
+    if split in ('train', 'val'):
+        metrics = {
+            f'{split}/recon_loss': out['recon_loss'],
+            f'{split}/vq_loss': out['vq_loss'],
+            f'{split}/commitment_loss': out['commitment_loss'],
+            f'{split}/codebook_perplexity': codebook_perplexity,
+            f'{split}/codebook_utilization': codebook_utilization,
+        }
+    else:
+        metrics = {
+            f'{split}/recon_loss': out['recon_loss'],
+            f'{split}/codebook_perplexity': codebook_perplexity,
+            f'{split}/codebook_utilization': codebook_utilization,
+        }
 
     if include_reconstructions:
         image_grid = reconstruction_grid(out['pred'], target, n=reconstruction_examples)

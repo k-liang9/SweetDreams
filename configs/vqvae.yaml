@@ -1,8 +1,8 @@
 exp:
   entity: kliang-personal
   project: sweetdreams
-  group: vqvae
-  run_name: run_1
+  group: vqvae_lr
+  run_name: vqvae
 
 data:
   h5_path: data/breakout.h5
@@ -16,14 +16,13 @@ train:
   batch_size: 512
   num_workers: 4
   device: auto
-  log_every: 64
   limit_train_batches:
   limit_val_batches:
   limit_test_batches:
 
 optimizer:
   type: adam
-  lr: 0.001
+  lr: 0.0001
 
 scheduler:
   type: none
@@ -31,7 +30,6 @@ scheduler:
 model:
   in_out_channels: 1
   hidden_dim: 128
-  latent_dim: 256
-  num_embeddings: 512
-  embedding_dim: 256
+  latent_dim: 128
+  num_embeddings: 128
   commitment_cost: 0.25
