@@ -1,3 +1,7 @@
+"""
+refer to https://github.com/eloialonso/iris/blob/main/src/models/transformer.py
+"""
+
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -9,10 +13,36 @@ class Transformer(nn.Module):
         self.cfg = cfg
         self.dropout = nn.Dropout(cfg.model.dropout)
         self.blocks = nn.ModuleList([Block(cfg)])
-        self.layer_norm = nn.LayerNorm(cfg.model.d_model)
+        self.ln_f = nn.LayerNorm(cfg.model.d_model)
+    
+    def forward(self, sequences):
+        x = self.dropout(sequences)
+        for i, block in enumerate(self.blocks):
+            x = block(x)
+            
+        x = self.ln_f(x)
+        return x
         
 class Block(nn.Module):
-    pass
+    def __init__(self, cfg):
+        super().__init__()
+        D = self.d_model = cfg.model.d_model
+        self.ln1 = nn.LayerNorm(D)
+        self.ln2 = nn.LayerNorm(D)
+        self.attn = SelfAttention(cfg)
+        self.mlp = nn.Sequential(
+            nn.Linear(D, 4*D),
+            nn.GELU(),
+            nn.Linear(4*D, D),
+            nn.Dropout(cfg.model.dropout),
+        )
+    
+    # TODO: add kv
+    def forward(self, x):
+        x_attn = self.attn(self.ln1(x))
+        x = x + x_attn
+        x = x + self.mlp(self.ln2(x))
+        return x
 
 class SelfAttention(nn.Module):
     def __init__(self, cfg):
