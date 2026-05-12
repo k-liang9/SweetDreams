@@ -1,0 +1,48 @@
+exp:
+  entity: kliang-personal
+  project: sweetdreams
+  group: world_model
+  run_name: world_model
+
+data:
+  h5_path: data/breakout.h5
+  seq_len: 16
+  train_frac: 0.8
+  val_frac: 0.1
+
+tokenizer:
+  checkpoint_path: outputs/vqvae/best_model.pt
+
+train:
+  seed: 0
+  epochs: 50
+  batch_size: 32
+  num_workers: 4
+  device: auto
+  log_every: 100
+  limit_train_batches:
+  limit_val_batches:
+  limit_test_batches:
+
+optimizer:
+  type: adamw
+  lr: 0.0003
+  weight_decay: 0.01
+
+scheduler:
+  type: none
+
+model:
+  num_frame_tokens: 512
+  num_actions: 4
+  tokens_per_frame: 16
+  max_seq_len: 271
+  d_model: 256
+  num_layers: 6
+  num_heads: 4
+  dropout: 0.1
+
+generate:
+  temperature: 1.0
+  top_k: 50
+  rollout_steps: 32
