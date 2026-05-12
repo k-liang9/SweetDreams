@@ -30,3 +30,6 @@ class WorldModelEmbeddings(nn.Module):
         
         x = torch.cat(chunks, dim=1)                        # (B,S,d)
         return self.dropout(x)
+    
+    
+# TODO: positional embeddings
