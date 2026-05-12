@@ -18,7 +18,7 @@ from torchmetrics.image.fid import FrechetInceptionDistance
 import tqdm
 import wandb
 
-from common.train_utils import (
+from train.utils import (
     aggregate_metrics,
     build_scheduler,
     checkpoint_state,
@@ -29,7 +29,7 @@ from common.train_utils import (
     set_seed,
 )
 from data import AtariEpisodeDataset
-from tokenizer import VQVAE
+from tokenizer import VQVAE, vqvae_metrics
 
 
 VAL_RECONSTRUCTION_EVERY_STEPS = 500
@@ -178,14 +178,14 @@ def run_epoch(
                 step += 1
 
         if is_train:
-            metrics = model.compute_metrics(split, out, x, target)
+            metrics = vqvae_metrics(split, out, target, num_embeddings=model.quantizer.K)
             run.log(prepare_metrics_for_log(metrics), step=step)
         else:
-            metrics = model.compute_metrics(
+            metrics = vqvae_metrics(
                 split,
                 out,
-                x,
                 target,
+                num_embeddings=model.quantizer.K,
                 include_reconstructions=include_reconstructions and not metrics_list,
                 reconstruction_examples=1,
             )

@@ -1,9 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from common.base import Model as Base
 from tokenizer.losses import vqvae_loss
-from tokenizer.metrics import vqvae_metrics
 
 class Encoder(nn.Module):
     def __init__(self, cfg):
@@ -127,9 +125,10 @@ class Decoder(nn.Module):
     def forward(self, z_q):
         return self.net(z_q)  # (B, 1, 64, 64)
     
-class VQVAE(Base):
+class VQVAE(nn.Module):
     def __init__(self, cfg):
-        super().__init__(cfg)
+        super().__init__()
+        self.cfg = cfg
         self.encoder =      Encoder(cfg)
         self.quantizer =    VectorQuantizer(cfg)
         self.decoder =      Decoder(cfg)
@@ -165,21 +164,3 @@ class VQVAE(Base):
     def decode_from_indices(self, indices):
         z_q = self.quantizer.normalized_embedding()[indices].permute(0, 3, 1, 2)
         return self.decoder(z_q)
-    
-    def compute_metrics(
-        self,
-        split,
-        out,
-        x,
-        target,
-        include_reconstructions=False,
-        reconstruction_examples=1,
-    ):
-        return vqvae_metrics(
-            split,
-            out,
-            target,
-            num_embeddings=self.quantizer.K,
-            include_reconstructions=include_reconstructions,
-            reconstruction_examples=reconstruction_examples,
-        )
