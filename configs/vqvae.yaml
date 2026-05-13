@@ -12,7 +12,7 @@ data:
 
 train:
   seed: 0
-  epochs: 100
+  epochs: 200
   batch_size: 512
   num_workers: 4
   device: auto
