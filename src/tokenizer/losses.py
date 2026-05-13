@@ -2,7 +2,7 @@ from torch.nn import functional as F
 
 
 def reconstruction_loss(pred, target):
-    return F.mse_loss(pred, target)
+    return F.l1_loss(pred, target) + 0.25 * F.mse_loss(pred, target)
 
 
 def vector_quantization_loss(z, z_q, commitment_cost):
