@@ -7,6 +7,7 @@ class WorldModelEmbeddings(nn.Module):
         self.d_model = cfg.model.d_model
         self.frame_token_embedding = nn.Embedding(cfg.vq.num_tokens, self.d_model)
         self.action_embedding = nn.Embedding(cfg.data.num_actions, self.d_model)
+        self.position_embedding = nn.Embedding(cfg.model.max_seq_len, self.d_model)
         self.dropout = nn.Dropout(cfg.model.dropout)
     
     def forward(self, frame_tokens, actions):
@@ -29,7 +30,9 @@ class WorldModelEmbeddings(nn.Module):
                 chunks.append(action_x[:, t])               # (B,1,d)
         
         x = torch.cat(chunks, dim=1)                        # (B,S,d)
+        
+        positions = torch.arange(x.size(1), device=x.device)
+        pos_x = self.position_embedding(positions).unsqueeze(0) # (1,S,d)
+        
+        x = x + pos_x
         return self.dropout(x)
-    
-    
-# TODO: positional embeddings
