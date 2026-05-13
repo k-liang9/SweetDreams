@@ -19,11 +19,11 @@ class Encoder(nn.Module):
             nn.Conv2d(hidden_dim, hidden_dim, kernel_size=4, stride=2, padding=1), # 16 -> 8
             nn.LayerNorm([hidden_dim, 8, 8]),
             nn.ReLU(),
-            nn.Conv2d(hidden_dim, latent_dim, kernel_size=4, stride=2, padding=1), # 8 -> 4
+            nn.Conv2d(hidden_dim, latent_dim, kernel_size=4, stride=1, padding=1), # 8 -> 8
         )
     
     def forward(self, x):
-        return self.net(x) # (B, latent_dim, 4, 4)
+        return self.net(x) # (B, latent_dim, 8, 8)
     
 class VectorQuantizer(nn.Module):
     def __init__(self, cfg):
@@ -109,7 +109,7 @@ class Decoder(nn.Module):
         hidden_dim = cfg.model.hidden_dim
         latent_dim = cfg.model.latent_dim
         self.net = nn.Sequential(
-            nn.ConvTranspose2d(latent_dim, hidden_dim, kernel_size=4, stride=2, padding=1),  # 4 → 8
+            nn.ConvTranspose2d(latent_dim, hidden_dim, kernel_size=4, stride=1, padding=1),  # 8 → 8
             nn.LayerNorm([hidden_dim, 8, 8]),
             nn.ReLU(),
             nn.ConvTranspose2d(hidden_dim, hidden_dim, kernel_size=4, stride=2, padding=1),  # 8 → 16
@@ -163,7 +163,7 @@ class VQVAE(nn.Module):
         _, indices, _ = self.quantizer(z)
         if leading_shape is not None:
             indices = indices.reshape(*leading_shape, *indices.shape[-2:])
-        return indices # (B, 4, 4) or (B, T, 4, 4)
+        return indices # (B, 8, 8) or (B, T, 8, 8)
     
     def decode_from_indices(self, indices):
         leading_shape = None
