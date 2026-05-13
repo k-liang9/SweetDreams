@@ -1,7 +1,7 @@
 import torch.nn as nn
-from torch.nn import functional as F
-from transformer import Transformer
-from embeddings import WorldModelEmbeddings
+
+from world_model.embeddings import WorldModelEmbeddings
+from world_model.transformer import Transformer
 
 class WorldModel(nn.Module):
     def __init__(self, cfg):

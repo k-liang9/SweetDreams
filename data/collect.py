@@ -12,7 +12,7 @@ def preprocess_frame(frame):
     resized = cv2.resize(gray, (64, 64), interpolation=cv2.INTER_AREA)
     return resized
 
-def collect_episodes(game="ALE/Breakout-v5", n_episodes=500, output_path="data/breakout.h5"):
+def collect_episodes(game="ALE/Breakout-v5", n_episodes=2500, output_path="data/breakout.h5"):
     env = gym.make(game, render_mode='rgb_array')
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     
