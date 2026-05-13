@@ -12,9 +12,7 @@ import torch
 from hydra.utils import to_absolute_path
 from omegaconf import DictConfig, OmegaConf
 from torch import optim
-from torch.nn import functional as F
 from torch.utils.data import DataLoader, random_split
-from torchmetrics.image.fid import FrechetInceptionDistance
 import tqdm
 import wandb
 
@@ -29,15 +27,8 @@ from train.utils import (
     set_seed,
 )
 from data import AtariEpisodeDataset
-from tokenizer import VQVAE, vqvae_metrics
-
-
-VAL_RECONSTRUCTION_EVERY_STEPS = 500
-
-
-def batch_frames(batch):
-    return batch[0] if isinstance(batch, (tuple, list)) else batch
-
+from tokenizer import VQVAE
+from world_model import WorldModel
 
 def make_loaders(cfg):
     dataset = AtariEpisodeDataset(
@@ -68,136 +59,62 @@ def make_loaders(cfg):
     test_loader = DataLoader(test_set, shuffle=False, **loader_kwargs)
     return train_loader, val_loader, test_loader
 
+def load_tokenizer(cfg, device=None):
+    checkpoint_path = Path(to_absolute_path(cfg.tokenizer.checkpoint_path))
+    checkpoint = torch.load(checkpoint_path, map_location='cpu')
 
-def fid_images(images):
-    images = images.detach().clamp(0, 1)
-    if images.shape[1] == 1:
-        images = images.repeat(1, 3, 1, 1)
-    return images
+    tokenizer_cfg = OmegaConf.create(checkpoint['cfg'])
+    tokenizer = VQVAE(tokenizer_cfg)
+    tokenizer.load_state_dict(checkpoint['model_state_dict'])
+    tokenizer.eval()
+    for param in tokenizer.parameters():
+        param.requires_grad_(False)
 
-
-@torch.no_grad()
-def collect_encoder_vectors(model, loader, device, num_batches):
-    was_training = model.training
-    model.eval()
-    vectors = []
-    total = min(len(loader), num_batches)
-
-    for batch_idx, batch in enumerate(tqdm.tqdm(loader, total=total, desc='k-means init batches')):
-        if batch_idx >= num_batches:
-            break
-
-        frames = move_to_device(batch_frames(batch), device)
-        frames = model.flatten_frames(frames)
-        z = model.encoder(frames)
-        z = F.normalize(z, p=2, dim=1)
-        z = z.permute(0, 2, 3, 1).reshape(-1, z.shape[1])
-        vectors.append(z)
-
-    model.train(was_training)
-    if not vectors:
-        raise ValueError('Need model.codebook.init.num_batches > 0 for k-means init')
-    return torch.cat(vectors, dim=0)
-
-
-def nearest_centroids(vectors, centroids, chunk_size):
-    assignments = []
-    for start in range(0, vectors.shape[0], chunk_size):
-        chunk = vectors[start:start + chunk_size]
-        distances = torch.cdist(chunk, centroids)
-        assignments.append(distances.argmin(dim=1))
-    return torch.cat(assignments, dim=0)
-
-
-@torch.no_grad()
-def init_codebook_kmeans(model, loader, device, cfg):
-    vectors = collect_encoder_vectors(
-        model,
-        loader,
-        device,
-        num_batches=cfg.model.codebook.init.num_batches,
-    )
-
-    num_embeddings = model.quantizer.K
-    if vectors.shape[0] < num_embeddings:
+    if tokenizer.quantizer.K != cfg.model.num_frame_tokens:
         raise ValueError(
-            f'Need at least {num_embeddings} encoder vectors for k-means init, '
-            f'but only collected {vectors.shape[0]}. Increase model.codebook.init.num_batches.'
+            f'World model expects {cfg.model.num_frame_tokens} frame tokens, '
+            f'but VQ-VAE checkpoint has {tokenizer.quantizer.K}'
         )
 
-    indices = torch.randperm(vectors.shape[0], device=vectors.device)[:num_embeddings]
-    centroids = vectors[indices].clone()
+    if device is not None:
+        tokenizer = tokenizer.to(device)
 
-    for _ in tqdm.tqdm(range(cfg.model.codebook.init.num_iters), desc='k-means init iterations'):
-        assignments = nearest_centroids(
-            vectors,
-            centroids,
-            chunk_size=cfg.model.codebook.init.chunk_size,
-        )
-        for code_idx in range(num_embeddings):
-            members = vectors[assignments == code_idx]
-            if len(members) > 0:
-                centroids[code_idx] = F.normalize(members.mean(dim=0), p=2, dim=0)
-            else:
-                replacement_idx = torch.randint(vectors.shape[0], (1,), device=vectors.device).item()
-                centroids[code_idx] = vectors[replacement_idx]
-
-    model.quantizer.embedding.weight.copy_(F.normalize(centroids, p=2, dim=1))
-    model.quantizer.reset_ema_state()
-
+    return tokenizer
 
 def run_epoch(
-    model,
+    tokenizer,
+    world_model,
     loader,
     split,
     device,
     optimizer=None,
     run=None,
     step=0,
-    include_reconstructions=False,
-    fid=None,
 ):
     is_train = optimizer is not None
-    model.train(is_train)
+    world_model.train(is_train)
     metrics_list = []
     desc = f'{split} batches'
-
+    
     for batch_idx, batch in enumerate(tqdm.tqdm(loader, total=len(loader), desc=desc)):
-        frames = move_to_device(batch_frames(batch), device)
-        frames = model.flatten_frames(frames)
-
+        frames, actions, _ = move_to_device(batch, device)
+        with torch.no_grad():
+            frame_tokens = tokenizer.encode(frames) # (B,T,4,4)
+            
+        frame_tokens = frame_tokens.flatten(2)      # (B,T,16)
+        actions = actions[:, :-1]                   # (B,T-1)
+        
         with torch.set_grad_enabled(is_train):
-            out = model(frames)
+            out = world_model(frame_tokens, actions)
             if is_train:
                 optimizer.zero_grad()
-                out['loss'].backward()
+                # TODO: loss computation
                 optimizer.step()
                 step += 1
-
-        if is_train:
-            metrics = vqvae_metrics(split, out, frames, num_embeddings=model.quantizer.K)
-            run.log(prepare_metrics_for_log(metrics), step=step)
-        else:
-            metrics = vqvae_metrics(
-                split,
-                out,
-                frames,
-                num_embeddings=model.quantizer.K,
-                include_reconstructions=include_reconstructions and not metrics_list,
-                reconstruction_examples=1,
-            )
-            if fid is not None:
-                fid.update(fid_images(frames), real=True)
-                fid.update(fid_images(out['pred']), real=False)
-            metrics_list.append(metrics)
-
-    if not is_train:
-        metrics = aggregate_metrics(metrics_list)
-        if fid is not None:
-            metrics[f'{split}/fid'] = fid.compute()
-        return metrics, step
-    return {}, step
-
+                
+            if is_train:
+                # TODO
+            
 
 @hydra.main(version_base=None, config_path='../configs', config_name='vqvae')
 def main(cfg: DictConfig):

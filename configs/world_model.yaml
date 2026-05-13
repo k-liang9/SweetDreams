@@ -11,7 +11,7 @@ data:
   val_frac: 0.1
 
 tokenizer:
-  checkpoint_path: outputs/vqvae/best_model.pt
+  checkpoint_path: weights/vqvae.pt
 
 train:
   seed: 0
@@ -20,9 +20,6 @@ train:
   num_workers: 4
   device: auto
   log_every: 100
-  limit_train_batches:
-  limit_val_batches:
-  limit_test_batches:
 
 optimizer:
   type: adamw

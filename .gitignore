@@ -5,3 +5,4 @@ data/breakout.h5
 wandb
 outputs
 multirun
+*.pt

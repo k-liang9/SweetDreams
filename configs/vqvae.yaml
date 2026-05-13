@@ -16,9 +16,6 @@ train:
   batch_size: 512
   num_workers: 4
   device: auto
-  limit_train_batches:
-  limit_val_batches:
-  limit_test_batches:
 
 optimizer:
   type: adam

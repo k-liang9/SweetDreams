@@ -133,22 +133,21 @@ class VQVAE(nn.Module):
         self.quantizer =    VectorQuantizer(cfg)
         self.decoder =      Decoder(cfg)
         self.commitment_cost = cfg.model.codebook.commitment_cost
-        
-    def featurize(self, batch):
-        frames = batch[0] if isinstance(batch, (tuple, list)) else batch
+
+    def flatten_frames(self, frames):
         if frames.dim() == 5:
             B, T, C, H, W = frames.shape
-            frames = frames.reshape(B * T, C, H, W)
-        return frames, frames
+            return frames.reshape(B * T, C, H, W)
+        if frames.dim() != 4:
+            raise ValueError(f'Expected frames with shape (B, C, H, W) or (B, T, C, H, W), got {tuple(frames.shape)}')
+        return frames
         
-    def forward(self, x, target=None):
-        if target is None:
-            target = x
-        
-        z = F.normalize(self.encoder(x), p=2, dim=1)
+    def forward(self, frames):
+        frames = self.flatten_frames(frames)
+        z = F.normalize(self.encoder(frames), p=2, dim=1)
         z_q, indices, z_q_raw = self.quantizer(z)
         pred = self.decoder(z_q)
-        loss_dict = vqvae_loss(pred, target, z, z_q_raw, self.commitment_cost)
+        loss_dict = vqvae_loss(pred, frames, z, z_q_raw, self.commitment_cost)
         return {
             'pred': pred,
             'indices': indices,
@@ -156,11 +155,25 @@ class VQVAE(nn.Module):
         }
     
     def encode(self, x):
-        # at inference - only token indices
+        leading_shape = None
+        if x.dim() == 5:
+            leading_shape = x.shape[:2]
+        x = self.flatten_frames(x)
         z = F.normalize(self.encoder(x), p=2, dim=1)
         _, indices, _ = self.quantizer(z)
-        return indices # (B, 4, 4)
+        if leading_shape is not None:
+            indices = indices.reshape(*leading_shape, *indices.shape[-2:])
+        return indices # (B, 4, 4) or (B, T, 4, 4)
     
     def decode_from_indices(self, indices):
+        leading_shape = None
+        if indices.dim() == 4:
+            leading_shape = indices.shape[:2]
+            indices = indices.reshape(-1, *indices.shape[-2:])
+        if indices.dim() != 3:
+            raise ValueError(f'Expected indices with shape (B, H, W) or (B, T, H, W), got {tuple(indices.shape)}')
         z_q = self.quantizer.normalized_embedding()[indices].permute(0, 3, 1, 2)
-        return self.decoder(z_q)
+        frames = self.decoder(z_q)
+        if leading_shape is not None:
+            frames = frames.reshape(*leading_shape, *frames.shape[1:])
+        return frames
