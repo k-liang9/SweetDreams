@@ -109,15 +109,18 @@ class Decoder(nn.Module):
         hidden_dim = cfg.model.hidden_dim
         latent_dim = cfg.model.latent_dim
         self.net = nn.Sequential(
-            nn.ConvTranspose2d(latent_dim, hidden_dim, kernel_size=4, stride=1, padding=1),  # 8 → 8
+            nn.ConvTranspose2d(latent_dim, hidden_dim, kernel_size=4, stride=1, padding=1),  # 7 → 8
             nn.LayerNorm([hidden_dim, 8, 8]),
-            nn.ReLU(),
+            nn.SiLU(),
+            nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1),  # 8 → 8
+            nn.LayerNorm([hidden_dim, 8, 8]),
+            nn.SiLU(),
             nn.ConvTranspose2d(hidden_dim, hidden_dim, kernel_size=4, stride=2, padding=1),  # 8 → 16
             nn.LayerNorm([hidden_dim, 16, 16]),
-            nn.ReLU(),
+            nn.SiLU(),
             nn.ConvTranspose2d(hidden_dim, hidden_dim, kernel_size=4, stride=2, padding=1),  # 16 → 32
             nn.LayerNorm([hidden_dim, 32, 32]),
-            nn.ReLU(),
+            nn.SiLU(),
             nn.ConvTranspose2d(hidden_dim, out_channels, kernel_size=4, stride=2, padding=1), # 32 → 64
             nn.Sigmoid()  # output in [0, 1] to match normalized frames
         )
