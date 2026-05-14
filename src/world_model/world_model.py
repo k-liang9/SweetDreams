@@ -9,7 +9,7 @@ class WorldModel(nn.Module):
         D = cfg.model.d_model
         self.embeddings = WorldModelEmbeddings(cfg)
         self.transformer = Transformer(cfg)
-        self.frame_head = nn.Linear(D, cfg.vq.num_tokens)
+        self.frame_head = nn.Linear(D, cfg.model.num_frame_tokens)
         # TODO: reward heads and done_heads
         # self.reward_head = 
         # self.done_head = 
@@ -19,4 +19,4 @@ class WorldModel(nn.Module):
         h = self.transformer(x)
         frame_logits = self.frame_head(h)
         
-        return frame_logits
+        return {'frame_logits': frame_logits}

@@ -20,6 +20,7 @@ train:
   num_workers: 4
   device: auto
   log_every: 100
+  grad_clip_norm: 1.0
 
 optimizer:
   type: adamw
@@ -32,12 +33,13 @@ scheduler:
 model:
   num_frame_tokens: 512
   num_actions: 4
-  tokens_per_frame: 16
-  max_seq_len: 271
+  tokens_per_frame: 64
+  max_seq_len: 1039
   d_model: 256
   num_layers: 6
   num_heads: 4
   dropout: 0.1
+  attention: causal
 
 generate:
   temperature: 1.0

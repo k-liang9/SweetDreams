@@ -12,7 +12,7 @@ class Transformer(nn.Module):
         super().__init__()
         self.cfg = cfg
         self.dropout = nn.Dropout(cfg.model.dropout)
-        self.blocks = nn.ModuleList([Block(cfg)])
+        self.blocks = nn.ModuleList([Block(cfg) for _ in range(cfg.model.num_layers)])
         self.ln_f = nn.LayerNorm(cfg.model.d_model)
     
     def forward(self, sequences):
@@ -47,10 +47,12 @@ class Block(nn.Module):
 class SelfAttention(nn.Module):
     def __init__(self, cfg):
         super().__init__()
-        assert cfg.model.embed_dim % cfg.model.num_heads == 0
-        assert cfg.model.attention in ('causal', 'block_causal')
+        assert cfg.model.d_model % cfg.model.num_heads == 0
+        attention = cfg.model.get('attention', 'causal')
+        assert attention in ('causal', 'block_causal')
         self.num_heads = cfg.model.num_heads
         D = self.d_model = cfg.model.d_model
+        self.head_dim = D // self.num_heads
         self.Wk = nn.Linear(D, D)
         self.Wq = nn.Linear(D, D)
         self.Wv = nn.Linear(D, D)
@@ -59,24 +61,32 @@ class SelfAttention(nn.Module):
         self.resid_dropout = nn.Dropout(cfg.model.dropout) # NOTE: using 1 unified dropout for simplicity
         self.proj = nn.Linear(D, D)
         
-        causal_mask = torch.tril(torch.ones(cfg.max_tokens, cfg.max_tokens))
-        block_causal_mask = torch.max(causal_mask, torch.block_diag(*[torch.ones(cfg.tokens_per_block, cfg.tokens_per_block) for _ in range(cfg.max_blocks)]))
-        self.register_buffer('mask', causal_mask if cfg.model.attention == 'causal' else block_causal_mask)
+        max_seq_len = cfg.model.max_seq_len
+        causal_mask = torch.tril(torch.ones(max_seq_len, max_seq_len, dtype=torch.bool))
+        if attention == 'block_causal':
+            tokens_per_block = cfg.model.get('tokens_per_block', cfg.model.tokens_per_frame + 1)
+            block_causal_mask = causal_mask.clone()
+            for start in range(0, max_seq_len, tokens_per_block):
+                end = min(start + tokens_per_block, max_seq_len)
+                block_causal_mask[start:end, start:end] = True
+            causal_mask = block_causal_mask
+        self.register_buffer('mask', causal_mask)
         
     # TODO: add kv cache
     def forward(self, x):
         B, T, C = x.size()
-        
-        head_dim = C // self.num_heads
+        if T > self.mask.size(0):
+            raise ValueError(f'Sequence length {T} exceeds attention mask size {self.mask.size(0)}')
 
-        Q = self.Wq(x).view(B, T, self.num_heads, head_dim).transpose(1, 2) # (B,T,C) -> (B,T,nh,hs) -> (B,nh,T,hs)
-        K = self.Wk(x).view(B, T, self.num_heads, head_dim).transpose(1, 2) # (B,T,C) -> (B,T,nh,hs) -> (B,nh,T,hs)
-        V = self.Wv(x).view(B, T, self.num_heads, head_dim).transpose(1, 2) # (B,T,C) -> (B,T,nh,hs) -> (B,nh,T,hs)
+        Q = self.Wq(x).view(B, T, self.num_heads, self.head_dim).transpose(1, 2) # (B,T,C) -> (B,T,nh,hs) -> (B,nh,T,hs)
+        K = self.Wk(x).view(B, T, self.num_heads, self.head_dim).transpose(1, 2) # (B,T,C) -> (B,T,nh,hs) -> (B,nh,T,hs)
+        V = self.Wv(x).view(B, T, self.num_heads, self.head_dim).transpose(1, 2) # (B,T,C) -> (B,T,nh,hs) -> (B,nh,T,hs)
         
         L = 0
         
         att = (Q @ K.transpose(-2, -1)) * (1.0 / math.sqrt(K.size(-1))) # (B,nh,T,hs) @ (B,nh,hs,T) -> (B,nh,T,T)
-        att = att.masked_fill(self.mask[L:L+T, :L+T] == 0, float('-inf')) # (B,nh,T,T)
+        mask = self.mask[L:L+T, :L+T].unsqueeze(0).unsqueeze(0)
+        att = att.masked_fill(~mask, float('-inf')) # (B,nh,T,T)
         att = F.softmax(att, dim=-1) # (B, nh, T, T)
         att = self.attn_dropout(att) # (B, nh, T, T)
 
