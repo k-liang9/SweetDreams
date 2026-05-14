@@ -3,7 +3,7 @@ from pathlib import Path
 import random
 
 import torch
-from torch.optim.lr_scheduler import StepLR
+from torch.optim.lr_scheduler import CosineAnnealingLR, StepLR
 import wandb
 
 
@@ -96,6 +96,13 @@ def build_scheduler(optimizer, scheduler_cfg):
             optimizer,
             step_size=scheduler_cfg.step_size,
             gamma=scheduler_cfg.gamma,
+        )
+
+    if scheduler_cfg.type == 'cosine':
+        return CosineAnnealingLR(
+            optimizer,
+            T_max=scheduler_cfg.t_max,
+            eta_min=scheduler_cfg.get('eta_min', 0.0),
         )
 
     raise ValueError(f'Unsupported scheduler type: {scheduler_cfg.type}')

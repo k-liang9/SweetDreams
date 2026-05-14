@@ -11,3 +11,4 @@ pillow
 hydra-core
 omegaconf
 matplotlib
+lpips

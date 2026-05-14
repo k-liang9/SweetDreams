@@ -1,4 +1,27 @@
+import torch
+import torch.nn as nn
 from torch.nn import functional as F
+
+
+class PerceptualLoss(nn.Module):
+    def __init__(self, net='vgg'):
+        super().__init__()
+        import lpips
+        self.net = lpips.LPIPS(net=net, verbose=False)
+        for p in self.net.parameters():
+            p.requires_grad_(False)
+        self.net.eval()
+
+    def train(self, mode=True):
+        super().train(mode)
+        self.net.eval()
+        return self
+
+    def forward(self, pred, target):
+        if pred.shape[1] == 1:
+            pred = pred.repeat(1, 3, 1, 1)
+            target = target.repeat(1, 3, 1, 1)
+        return self.net(pred * 2 - 1, target * 2 - 1).mean()
 
 
 def reconstruction_loss(pred, target):
@@ -20,11 +43,20 @@ def vector_quantization_loss(z, z_q, commitment_cost):
     }
 
 
-def vqvae_loss(pred, target, z, z_q, commitment_cost):
+def vqvae_loss(pred, target, z, z_q, commitment_cost, perceptual=None, perceptual_weight=0.0):
     recon_loss = reconstruction_loss(pred, target)
     loss_dict = vector_quantization_loss(z, z_q, commitment_cost)
+    total = recon_loss + loss_dict['vq_loss']
+
+    if perceptual is not None and perceptual_weight > 0:
+        perceptual_loss = perceptual(pred, target)
+        total = total + perceptual_weight * perceptual_loss
+    else:
+        perceptual_loss = torch.zeros((), device=pred.device)
+
     return {
-        'loss': recon_loss + loss_dict['vq_loss'],
+        'loss': total,
         'recon_loss': recon_loss,
+        'perceptual_loss': perceptual_loss,
         **loss_dict,
     }

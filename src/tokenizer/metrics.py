@@ -38,7 +38,9 @@ def vqvae_metrics(
     codebook_utilization, codebook_perplexity = codebook_metrics(out['indices'], num_embeddings)
     if split in ('train', 'val'):
         metrics = {
+            f'{split}/loss': out['loss'],
             f'{split}/recon_loss': out['recon_loss'],
+            f'{split}/perceptual_loss': out['perceptual_loss'],
             f'{split}/vq_loss': out['vq_loss'],
             f'{split}/commitment_loss': out['commitment_loss'],
             f'{split}/codebook_perplexity': codebook_perplexity,
@@ -47,6 +49,7 @@ def vqvae_metrics(
     else:
         metrics = {
             f'{split}/recon_loss': out['recon_loss'],
+            f'{split}/perceptual_loss': out['perceptual_loss'],
             f'{split}/codebook_perplexity': codebook_perplexity,
             f'{split}/codebook_utilization': codebook_utilization,
         }

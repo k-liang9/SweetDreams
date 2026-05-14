@@ -176,6 +176,7 @@ def run_epoch(
 
         if is_train:
             metrics = vqvae_metrics(split, out, frames, num_embeddings=model.quantizer.K)
+            metrics[f'{split}/lr'] = optimizer.param_groups[0]['lr']
             run.log(prepare_metrics_for_log(metrics), step=step)
         else:
             metrics = vqvae_metrics(
@@ -203,6 +204,8 @@ def run_epoch(
 def main(cfg: DictConfig):
     set_seed(cfg.train.seed)
     device = get_device(cfg.train.device)
+    if device.type == 'cuda':
+        torch.set_float32_matmul_precision('high')
 
     train_loader, val_loader, test_loader = make_loaders(cfg)
     model = VQVAE(cfg).to(device)

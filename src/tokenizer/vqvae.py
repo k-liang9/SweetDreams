@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from tokenizer.losses import vqvae_loss
+from tokenizer.losses import PerceptualLoss, vqvae_loss
 
 class SpatialSelfAttention(nn.Module):
     def __init__(self, channels, num_heads=4, dropout=0.0):
@@ -165,6 +165,11 @@ class VQVAE(nn.Module):
         self.quantizer =    VectorQuantizer(cfg)
         self.decoder =      Decoder(cfg)
         self.commitment_cost = cfg.model.codebook.commitment_cost
+        self.perceptual_weight = float(cfg.loss.perceptual_weight)
+        if self.perceptual_weight > 0:
+            self.perceptual = PerceptualLoss(net=cfg.loss.perceptual_net)
+        else:
+            self.perceptual = None
 
     def flatten_frames(self, frames):
         if frames.dim() == 5:
@@ -179,7 +184,10 @@ class VQVAE(nn.Module):
         z = F.normalize(self.encoder(frames), p=2, dim=1)
         z_q, indices, z_q_raw = self.quantizer(z)
         pred = self.decoder(z_q)
-        loss_dict = vqvae_loss(pred, frames, z, z_q_raw, self.commitment_cost)
+        loss_dict = vqvae_loss(
+            pred, frames, z, z_q_raw, self.commitment_cost,
+            perceptual=self.perceptual, perceptual_weight=self.perceptual_weight,
+        )
         return {
             'pred': pred,
             'indices': indices,
