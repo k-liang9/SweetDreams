@@ -27,7 +27,7 @@ scheduler:
   eta_min: 0.0
 
 loss:
-  perceptual_weight: 1
+  perceptual_weight: 0.5
   perceptual_net: vgg
 
 model:
