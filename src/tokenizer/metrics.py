@@ -1,9 +1,12 @@
 import torch
+import torch.distributed as dist
 import wandb
 
 
 def codebook_metrics(indices, num_embeddings):
     counts = torch.bincount(indices.reshape(-1), minlength=num_embeddings).float()
+    if dist.is_initialized():
+        dist.all_reduce(counts, op=dist.ReduceOp.SUM)
     probs = counts / counts.sum().clamp_min(1)
     used = counts.gt(0).float().sum()
     nonzero_probs = probs[probs.gt(0)]

@@ -1,4 +1,5 @@
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 from torch.nn import functional as F
 from tokenizer.losses import PerceptualLoss, vqvae_loss
@@ -87,6 +88,10 @@ class VectorQuantizer(nn.Module):
         sums = torch.zeros(self.K, self.D, device=z_flat.device, dtype=z_flat.dtype)
         sums.index_add_(0, indices, z_flat)
 
+        if dist.is_initialized():
+            dist.all_reduce(counts, op=dist.ReduceOp.SUM)
+            dist.all_reduce(sums, op=dist.ReduceOp.SUM)
+
         self.ema_count.mul_(self.decay).add_(counts, alpha=1 - self.decay)
         self.ema_sum.mul_(self.decay).add_(sums, alpha=1 - self.decay)
 
@@ -96,10 +101,16 @@ class VectorQuantizer(nn.Module):
         dead_codes = self.ema_count < self.restart_threshold
         if dead_codes.any():
             replacement_count = dead_codes.sum().item()
-            replacement_indices = torch.randint(z_flat.shape[0], (replacement_count,), device=z_flat.device)
-            replacements = z_flat[replacement_indices]
+            world_size = dist.get_world_size() if dist.is_initialized() else 1
+            if dist.is_initialized() and dist.get_rank() != 0:
+                replacements = torch.empty(replacement_count, self.D, device=z_flat.device, dtype=z_flat.dtype)
+            else:
+                replacement_indices = torch.randint(z_flat.shape[0], (replacement_count,), device=z_flat.device)
+                replacements = z_flat[replacement_indices].contiguous()
+            if dist.is_initialized():
+                dist.broadcast(replacements, src=0)
             embedding[dead_codes] = replacements
-            restart_count = max(self.restart_threshold, z_flat.shape[0] / self.K)
+            restart_count = max(self.restart_threshold, world_size * z_flat.shape[0] / self.K)
             self.ema_count[dead_codes] = restart_count
             self.ema_sum[dead_codes] = replacements * restart_count
 

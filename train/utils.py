@@ -1,10 +1,51 @@
 import copy
+import os
 from pathlib import Path
 import random
 
 import torch
+import torch.distributed as dist
 from torch.optim.lr_scheduler import CosineAnnealingLR, StepLR
 import wandb
+
+
+def init_distributed():
+    if 'LOCAL_RANK' not in os.environ:
+        return 0, 1
+    local_rank = int(os.environ['LOCAL_RANK'])
+    if torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
+    dist.init_process_group(backend='nccl' if torch.cuda.is_available() else 'gloo')
+    return local_rank, dist.get_world_size()
+
+
+def cleanup_distributed():
+    if dist.is_initialized():
+        dist.destroy_process_group()
+
+
+def is_distributed():
+    return dist.is_initialized()
+
+
+def get_rank():
+    return dist.get_rank() if dist.is_initialized() else 0
+
+
+def get_world_size():
+    return dist.get_world_size() if dist.is_initialized() else 1
+
+
+def is_main_process():
+    return get_rank() == 0
+
+
+def all_reduce_mean(tensor):
+    if not dist.is_initialized():
+        return tensor
+    dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
+    tensor.div_(dist.get_world_size())
+    return tensor
 
 
 def set_seed(seed):
