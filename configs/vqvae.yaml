@@ -27,22 +27,22 @@ scheduler:
   eta_min: 0.0
 
 loss:
-  perceptual_weight: 0.2
+  perceptual_weight: 1
   perceptual_net: vgg
 
 model:
-  in_out_channels: 1
+  in_out_channels: 3
   hidden_dim: 256
   latent_dim: 256
   codebook:
     num_embeddings: 512
-    commitment_cost: 0.25
+    commitment_cost: 1
     init:
       type: kmeans
       num_batches: 10
       num_iters: 20
       chunk_size: 65536
     ema:
-      decay: 0.995
+      decay: 0.99
       eps: 1e-5
       restart_threshold: 0.1

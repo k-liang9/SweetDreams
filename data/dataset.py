@@ -28,13 +28,13 @@ class AtariEpisodeDataset(Dataset):
     def __getitem__(self, idx):
         ep_key, start = self.index[idx]
         ep = self._get_file()[ep_key]
-        frames = ep['frames'][start:start + self.seq_len] # (T, 64, 64)
+        frames = ep['frames'][start:start + self.seq_len] # (T, 64, 64, 3)
         actions = ep['actions'][start:start + self.seq_len] # (T,)
         rewards = ep['rewards'][start:start + self.seq_len] # (T,)
-        
+
         # normalize frames to [0, 1]
         frames = torch.tensor(frames, dtype=torch.float32) / 255.0
-        frames = frames.unsqueeze(1) # (T, 1, 64, 64) - channel dim
+        frames = frames.permute(0, 3, 1, 2).contiguous() # (T, 3, 64, 64) - HWC -> CHW
         actions = torch.tensor(actions, dtype=torch.long)
         rewards = torch.tensor(rewards, dtype=torch.float32)
         

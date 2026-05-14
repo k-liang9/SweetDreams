@@ -102,6 +102,9 @@ class VectorQuantizer(nn.Module):
         if dead_codes.any():
             replacement_count = dead_codes.sum().item()
             world_size = dist.get_world_size() if dist.is_initialized() else 1
+            is_rank0 = not dist.is_initialized() or dist.get_rank() == 0
+            if is_rank0:
+                print(f'[vqvae] codebook reset: {replacement_count}/{self.K} dead codes replaced', flush=True)
             if dist.is_initialized() and dist.get_rank() != 0:
                 replacements = torch.empty(replacement_count, self.D, device=z_flat.device, dtype=z_flat.dtype)
             else:
@@ -149,24 +152,27 @@ class Decoder(nn.Module):
         hidden_dim = cfg.model.hidden_dim
         latent_dim = cfg.model.latent_dim
         self.net = nn.Sequential(
-            nn.ConvTranspose2d(latent_dim, hidden_dim, kernel_size=3, stride=1, padding=1),  # 8 -> 8
+            nn.Conv2d(latent_dim, hidden_dim, kernel_size=3, stride=1, padding=1),  # 8 → 8
             nn.LayerNorm([hidden_dim, 8, 8]),
             nn.SiLU(),
             nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1),  # 8 → 8
             nn.LayerNorm([hidden_dim, 8, 8]),
             nn.SiLU(),
-            nn.ConvTranspose2d(hidden_dim, hidden_dim, kernel_size=4, stride=2, padding=1),  # 8 → 16
+            nn.Upsample(scale_factor=2, mode='nearest'),
+            nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1),  # 8 → 16
             nn.LayerNorm([hidden_dim, 16, 16]),
             nn.SiLU(),
-            nn.ConvTranspose2d(hidden_dim, hidden_dim, kernel_size=4, stride=2, padding=1),  # 16 → 32
+            nn.Upsample(scale_factor=2, mode='nearest'),
+            nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1),  # 16 → 32
             nn.LayerNorm([hidden_dim, 32, 32]),
             nn.SiLU(),
-            nn.ConvTranspose2d(hidden_dim, out_channels, kernel_size=4, stride=2, padding=1), # 32 → 64
+            nn.Upsample(scale_factor=2, mode='nearest'),
+            nn.Conv2d(hidden_dim, out_channels, kernel_size=3, stride=1, padding=1),  # 32 → 64
             nn.Sigmoid()  # output in [0, 1] to match normalized frames
         )
 
     def forward(self, z_q):
-        return self.net(z_q)  # (B, 1, 64, 64)
+        return self.net(z_q)  # (B, 3, 64, 64)
     
 class VQVAE(nn.Module):
     def __init__(self, cfg):

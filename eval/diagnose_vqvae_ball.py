@@ -65,9 +65,16 @@ def clamp(value, low, high):
 
 
 def detect_ball(frames: np.ndarray, frame_index: int, args) -> BallCandidate | None:
-    frame = frames[frame_index].astype(np.int16)
-    prev_frame = frames[frame_index - 1].astype(np.int16)
-    next_frame = frames[frame_index + 1].astype(np.int16)
+    # Project RGB frames to a single luminance channel for motion/intensity detection.
+    # The reconstruction-comparison logic downstream still uses the RGB frames.
+    def to_gray(rgb_frame: np.ndarray) -> np.ndarray:
+        if rgb_frame.ndim == 3:
+            return cv2.cvtColor(rgb_frame, cv2.COLOR_RGB2GRAY)
+        return rgb_frame
+
+    frame = to_gray(frames[frame_index]).astype(np.int16)
+    prev_frame = to_gray(frames[frame_index - 1]).astype(np.int16)
+    next_frame = to_gray(frames[frame_index + 1]).astype(np.int16)
 
     motion = np.maximum(np.abs(frame - prev_frame), np.abs(next_frame - frame))
     mask = (motion >= args.motion_threshold) & (frame >= args.intensity_threshold)
@@ -138,7 +145,7 @@ def collect_candidates(args) -> tuple[list[tuple[BallCandidate, np.ndarray]], in
 
 def erase_candidate(frame: np.ndarray, candidate: BallCandidate, radius: int) -> np.ndarray:
     x0, y0, x1, y1 = candidate.bbox
-    height, width = frame.shape
+    height, width = frame.shape[:2]
 
     inner_x0 = clamp(x0 - radius, 0, width)
     inner_y0 = clamp(y0 - radius, 0, height)
@@ -153,13 +160,23 @@ def erase_candidate(frame: np.ndarray, candidate: BallCandidate, radius: int) ->
 
     out = frame.copy()
     outer = out[outer_y0:outer_y1, outer_x0:outer_x1]
-    ring_mask = np.ones(outer.shape, dtype=bool)
+    # Build a 2D ring mask over spatial dims so it works for both 2D and 3D frames.
+    spatial_shape = outer.shape[:2]
+    ring_mask = np.ones(spatial_shape, dtype=bool)
     ring_mask[
         inner_y0 - outer_y0:inner_y1 - outer_y0,
         inner_x0 - outer_x0:inner_x1 - outer_x0,
     ] = False
-    background = np.median(outer[ring_mask]) if np.any(ring_mask) else np.median(out)
-    out[inner_y0:inner_y1, inner_x0:inner_x1] = np.uint8(background)
+    if frame.ndim == 3:
+        channels = frame.shape[2]
+        if np.any(ring_mask):
+            background = np.median(outer[ring_mask], axis=0)
+        else:
+            background = np.median(out.reshape(-1, channels), axis=0)
+        out[inner_y0:inner_y1, inner_x0:inner_x1] = background.astype(np.uint8)
+    else:
+        background = np.median(outer[ring_mask]) if np.any(ring_mask) else np.median(out)
+        out[inner_y0:inner_y1, inner_x0:inner_x1] = np.uint8(background)
     return out
 
 
@@ -191,11 +208,24 @@ def load_vqvae(checkpoint_path: str | None, device):
 
 
 def frame_to_tensor(frame: np.ndarray, device):
-    return torch.from_numpy(frame).float().div(255.0).unsqueeze(0).unsqueeze(0).to(device)
+    tensor = torch.from_numpy(frame).float().div(255.0)
+    if tensor.ndim == 2:
+        tensor = tensor.unsqueeze(0).unsqueeze(0)  # (H, W) -> (1, 1, H, W)
+    elif tensor.ndim == 3:
+        tensor = tensor.permute(2, 0, 1).unsqueeze(0)  # (H, W, C) -> (1, C, H, W)
+    return tensor.to(device)
 
 
 def tensor_to_uint8_image(tensor: torch.Tensor) -> np.ndarray:
-    array = tensor.detach().cpu().squeeze().clamp(0, 1).numpy()
+    array = tensor.detach().cpu().clamp(0, 1).numpy()
+    # Drop batch dim if present, then convert CHW -> HWC for multi-channel images.
+    if array.ndim == 4:
+        array = array[0]
+    if array.ndim == 3:
+        if array.shape[0] == 1:
+            array = array[0]
+        else:
+            array = np.transpose(array, (1, 2, 0))
     return (array * 255.0).round().astype(np.uint8)
 
 
@@ -216,7 +246,7 @@ def analyze_with_model(model, frame: np.ndarray, erased: np.ndarray, candidate: 
         pred_erased = model.decode_from_indices(tokens_erased)
 
     _, latent_h, latent_w = tokens.shape
-    frame_h, frame_w = frame.shape
+    frame_h, frame_w = frame.shape[:2]
     cx, cy = candidate.center
     latent_x = clamp(int(cx * latent_w / frame_w), 0, latent_w - 1)
     latent_y = clamp(int(cy * latent_h / frame_h), 0, latent_h - 1)

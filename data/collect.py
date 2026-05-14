@@ -12,8 +12,7 @@ gym.register_envs(ale_py)
 
 
 def preprocess_frame(frame, size=64):
-    gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-    return cv2.resize(gray, (size, size), interpolation=cv2.INTER_AREA)
+    return cv2.resize(frame, (size, size), interpolation=cv2.INTER_AREA)
 
 
 def get_action_ids(env):
