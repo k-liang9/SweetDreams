@@ -1,6 +1,6 @@
 .python-version
 **/__pycache__
-data/breakout.h5
+data/*.h5
 .DS_Store
 wandb
 outputs

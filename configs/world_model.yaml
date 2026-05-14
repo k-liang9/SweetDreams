@@ -5,7 +5,7 @@ exp:
   run_name: world_model
 
 data:
-  h5_path: data/breakout.h5
+  h5_path: data/old_breakout.h5
   seq_len: 16
   train_frac: 0.8
   val_frac: 0.1

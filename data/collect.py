@@ -83,7 +83,7 @@ def choose_action(frame, env, action_ids, rng, policy, epsilon, needs_fire):
 def collect_episodes(
     game="ALE/Breakout-v5",
     n_episodes=2500,
-    output_path="data/breakout.h5",
+    output_path="data/old_breakout.h5",
     policy="mixed",
     random_episode_frac=0.25,
     epsilon=0.05,
@@ -158,7 +158,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--game", default="ALE/Breakout-v5")
     parser.add_argument("--n-episodes", type=int, default=500)
-    parser.add_argument("--output-path", default="data/breakout.h5")
+    parser.add_argument("--output-path", default="data/old_breakout.h5")
     parser.add_argument("--policy", choices=["random", "heuristic", "mixed"], default="mixed")
     parser.add_argument("--random-episode-frac", type=float, default=0.25)
     parser.add_argument("--epsilon", type=float, default=0.05)

@@ -48,7 +48,7 @@ def parse_args():
             "episode lengths/returns, and Breakout-specific coverage proxies."
         )
     )
-    parser.add_argument("--h5-path", default="data/breakout.h5")
+    parser.add_argument("--h5-path", default="data/old_breakout.h5")
     parser.add_argument("--output-dir", default="diagnostics/dataset_diversity")
     parser.add_argument("--max-episodes", type=int, default=None)
     parser.add_argument("--sample-frames", type=int, default=4096)
