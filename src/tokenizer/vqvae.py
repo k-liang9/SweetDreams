@@ -3,6 +3,30 @@ import torch.nn as nn
 from torch.nn import functional as F
 from tokenizer.losses import vqvae_loss
 
+class SpatialSelfAttention(nn.Module):
+    def __init__(self, channels, num_heads=4, dropout=0.0):
+        super().__init__()
+        self.norm = nn.GroupNorm(num_groups=32, num_channels=channels)
+        self.attn = nn.MultiheadAttention(
+            embed_dim=channels,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True,
+        )
+        
+    def forward(self, x):
+        B, C, H, W = x.shape
+        residual = x
+        
+        x = self.norm(x)
+        x = x.reshape(B, C, -1).transpose(1, 2) # (B, H*W, C)
+        
+        x, _ = self.attn(x, x, x, need_weights=False)
+        
+        x = x.transpose(1, 2).reshape(B, C, H, W)
+        return residual + x
+    
+
 class Encoder(nn.Module):
     def __init__(self, cfg):
         super().__init__()
@@ -13,12 +37,17 @@ class Encoder(nn.Module):
             nn.Conv2d(in_channels, hidden_dim, kernel_size=4, stride=2, padding=1), # 64 -> 32
             nn.LayerNorm([hidden_dim, 32, 32]),
             nn.ReLU(),
+            
             nn.Conv2d(hidden_dim, hidden_dim, kernel_size=4, stride=2, padding=1), # 32 -> 16
             nn.LayerNorm([hidden_dim, 16, 16]),
             nn.ReLU(),
+            SpatialSelfAttention(hidden_dim, num_heads=4),
+            
             nn.Conv2d(hidden_dim, hidden_dim, kernel_size=4, stride=2, padding=1), # 16 -> 8
             nn.LayerNorm([hidden_dim, 8, 8]),
             nn.ReLU(),
+            SpatialSelfAttention(hidden_dim, num_heads=4),
+            
             nn.Conv2d(hidden_dim, latent_dim, kernel_size=3, stride=1, padding=1), # 8 -> 8
         )
     
