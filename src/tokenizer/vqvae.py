@@ -19,7 +19,7 @@ class Encoder(nn.Module):
             nn.Conv2d(hidden_dim, hidden_dim, kernel_size=4, stride=2, padding=1), # 16 -> 8
             nn.LayerNorm([hidden_dim, 8, 8]),
             nn.ReLU(),
-            nn.Conv2d(hidden_dim, latent_dim, kernel_size=4, stride=1, padding=1), # 8 -> 8
+            nn.Conv2d(hidden_dim, latent_dim, kernel_size=3, stride=1, padding=1), # 8 -> 8
         )
     
     def forward(self, x):
@@ -109,7 +109,7 @@ class Decoder(nn.Module):
         hidden_dim = cfg.model.hidden_dim
         latent_dim = cfg.model.latent_dim
         self.net = nn.Sequential(
-            nn.ConvTranspose2d(latent_dim, hidden_dim, kernel_size=4, stride=1, padding=1),  # 7 → 8
+            nn.ConvTranspose2d(latent_dim, hidden_dim, kernel_size=3, stride=1, padding=1),  # 8 -> 8
             nn.LayerNorm([hidden_dim, 8, 8]),
             nn.SiLU(),
             nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1),  # 8 → 8
