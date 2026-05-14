@@ -28,7 +28,7 @@ from train.utils import (
 )
 from data import AtariEpisodeDataset
 from tokenizer import VQVAE
-from world_model import WorldModel
+from world_model import WorldModel, world_model_loss, world_model_metrics
 
 def make_loaders(cfg):
     dataset = AtariEpisodeDataset(
@@ -99,16 +99,17 @@ def run_epoch(
     for batch_idx, batch in enumerate(tqdm.tqdm(loader, total=len(loader), desc=desc)):
         frames, actions, _ = move_to_device(batch, device)
         with torch.no_grad():
-            frame_tokens = tokenizer.encode(frames) # (B,T,4,4)
+            frame_tokens = tokenizer.encode(frames) # (B,T,8,8)
             
-        frame_tokens = frame_tokens.flatten(2)      # (B,T,16)
+        frame_tokens = frame_tokens.flatten(2)      # (B,T,64)
         actions = actions[:, :-1]                   # (B,T-1)
         
         with torch.set_grad_enabled(is_train):
             out = world_model(frame_tokens, actions)
             if is_train:
                 optimizer.zero_grad()
-                # TODO: loss computation
+                loss = world_model_loss(out, frame_tokens)
+                loss.backward()
                 optimizer.step()
                 step += 1
                 

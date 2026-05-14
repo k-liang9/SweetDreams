@@ -2,6 +2,7 @@ from torch.nn import functional as F
 
 
 def reconstruction_loss(pred, target):
+    return F.l1_loss(pred, target)
     # TODO: ball-specific isolation
     weight = 1.0 + 10.0 * (target > 0.5).float() # emphasize bright spots (target: pong ball)
     weight = weight / weight.mean()
