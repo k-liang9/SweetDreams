@@ -7,9 +7,8 @@ exp:
 data:
   h5_path: data/breakout.h5
   seq_len: 1
-  train_frac: 0.8
-  val_frac: 0.1
-  # TODO: need to change split fractions
+  train_frac: 0.9
+  val_frac: 0.05
 
 train:
   seed: 0
@@ -17,7 +16,7 @@ train:
   batch_size: 64
   num_workers: 8
   device: auto
-  val_every_steps: 200
+  val_every_steps: 400
 
 optimizer:
   type: adam

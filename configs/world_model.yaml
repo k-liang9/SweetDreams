@@ -7,8 +7,8 @@ exp:
 data:
   h5_path: data/breakout.h5
   seq_len: 16
-  train_frac: 0.8
-  val_frac: 0.1
+  train_frac: 0.9
+  val_frac: 0.05
 
 tokenizer:
   checkpoint_path: weights/vqvae.pt
@@ -20,7 +20,7 @@ train:
   num_workers: 8
   device: auto
   grad_clip_norm: 1.0
-  val_every_steps: 200
+  val_every_steps: 400
 
 optimizer:
   type: adamw
