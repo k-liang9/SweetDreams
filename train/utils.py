@@ -103,9 +103,10 @@ def aggregate_metrics(metrics_list):
         return {}
 
     aggregated = {}
-    keys = set()
+    keys = {}  # ordered union via dict insertion order
     for metrics in metrics_list:
-        keys.update(metrics.keys())
+        for key in metrics.keys():
+            keys[key] = None
     for key in keys:
         values = [metrics[key] for metrics in metrics_list if key in metrics]
         if not values:
