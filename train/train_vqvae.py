@@ -405,9 +405,7 @@ def _run(cfg, device, local_rank):
             checkpoint_path = Path(run.dir) / 'best_model.pt'
             save_checkpoint(best_model_state, checkpoint_path)
 
-        if is_main_process():
-            print(f'[test-debug] reached test phase, step={step}, world_size={get_world_size()}', flush=True)
-        fid = FrechetInceptionDistance(normalize=True).to(device) if is_main_process() else None
+        fid = FrechetInceptionDistance(normalize=True).to(device)
         with torch.no_grad():
             test_metrics, step = run_epoch(
                 model,
@@ -418,13 +416,8 @@ def _run(cfg, device, local_rank):
                 include_reconstructions=True,
                 fid=fid,
             )
-        if is_main_process():
-            print(f'[test-debug] run_epoch returned, step={step}, keys={list(test_metrics.keys())}', flush=True)
-            print(f'[test-debug] run is None? {run is None}', flush=True)
         if is_main_process() and run is not None:
-            print(f'[test-debug] about to call run.log at step={step}', flush=True)
             run.log(prepare_metrics_for_log(test_metrics), step=step)
-            print(f'[test-debug] run.log returned', flush=True)
     finally:
         if run is not None:
             run.finish()
