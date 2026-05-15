@@ -1,6 +1,8 @@
 torch
 torchmetrics[image]
 gymnasium[atari]
+gym==0.26.2
+shimmy>=0.2.1
 ale-py
 h5py
 opencv-python
@@ -12,3 +14,5 @@ hydra-core
 omegaconf
 matplotlib
 lpips
+stable-baselines3
+huggingface_hub
