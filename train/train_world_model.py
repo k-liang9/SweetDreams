@@ -137,13 +137,6 @@ def tokenize_batch(tokenizer, batch, device, cfg):
             f'but tokenizer produced {tokens_per_frame}. Update model.tokens_per_frame.'
         )
 
-    seq_len = frame_tokens.size(1) * tokens_per_frame + (frame_tokens.size(1) - 1)
-    if seq_len > cfg.model.max_seq_len:
-        raise ValueError(
-            f'Interleaved token sequence length is {seq_len}, but model.max_seq_len is '
-            f'{cfg.model.max_seq_len}. Increase model.max_seq_len.'
-        )
-
     return frame_tokens, actions[:, :-1].contiguous()
 
 

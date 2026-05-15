@@ -34,7 +34,6 @@ model:
   num_frame_tokens: 512
   num_actions: 4
   tokens_per_frame: 64
-  max_seq_len: 1039
   d_model: 256
   num_layers: 6
   num_heads: 4

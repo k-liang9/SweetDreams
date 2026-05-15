@@ -7,6 +7,8 @@ import torch.nn as nn
 from torch.nn import functional as F
 import math
 
+from world_model.embeddings import compute_max_seq_len
+
 class Transformer(nn.Module):
     def __init__(self, cfg):
         super().__init__()
@@ -61,7 +63,7 @@ class SelfAttention(nn.Module):
         self.resid_dropout = nn.Dropout(cfg.model.dropout) # NOTE: using 1 unified dropout for simplicity
         self.proj = nn.Linear(D, D)
         
-        max_seq_len = cfg.model.max_seq_len
+        max_seq_len = compute_max_seq_len(cfg)
         causal_mask = torch.tril(torch.ones(max_seq_len, max_seq_len, dtype=torch.bool))
         if attention == 'block_causal':
             tokens_per_block = cfg.model.get('tokens_per_block', cfg.model.tokens_per_frame + 1)

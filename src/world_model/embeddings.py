@@ -1,14 +1,21 @@
 import torch
 import torch.nn as nn
 
+
+def compute_max_seq_len(cfg):
+    """Interleaved length of one training sequence; rollout uses a sliding window of the same size."""
+    seq_len = cfg.data.seq_len
+    return seq_len * cfg.model.tokens_per_frame + max(seq_len - 1, 0)
+
+
 class WorldModelEmbeddings(nn.Module):
     def __init__(self, cfg):
         super().__init__()
         self.d_model = cfg.model.d_model
-        self.max_seq_len = cfg.model.max_seq_len
+        self.max_seq_len = compute_max_seq_len(cfg)
         self.frame_token_embedding = nn.Embedding(cfg.model.num_frame_tokens, self.d_model)
         self.action_embedding = nn.Embedding(cfg.model.num_actions, self.d_model)
-        self.position_embedding = nn.Embedding(cfg.model.max_seq_len, self.d_model)
+        self.position_embedding = nn.Embedding(self.max_seq_len, self.d_model)
         self.dropout = nn.Dropout(cfg.model.dropout)
     
     def forward(self, frame_tokens, actions):
