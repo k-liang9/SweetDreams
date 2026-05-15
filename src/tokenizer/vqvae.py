@@ -102,9 +102,6 @@ class VectorQuantizer(nn.Module):
         if dead_codes.any():
             replacement_count = dead_codes.sum().item()
             world_size = dist.get_world_size() if dist.is_initialized() else 1
-            is_rank0 = not dist.is_initialized() or dist.get_rank() == 0
-            if is_rank0:
-                print(f'[vqvae] codebook reset: {replacement_count}/{self.K} dead codes replaced', flush=True)
             if dist.is_initialized() and dist.get_rank() != 0:
                 replacements = torch.empty(replacement_count, self.D, device=z_flat.device, dtype=z_flat.dtype)
             else:

@@ -48,6 +48,16 @@ def all_reduce_mean(tensor):
     return tensor
 
 
+def check_stop_file(path, device):
+    """Rank 0 checks the sentinel file; decision is broadcast so all ranks agree."""
+    path = Path(path)
+    if not dist.is_initialized():
+        return path.exists()
+    flag = torch.tensor(int(path.exists()) if dist.get_rank() == 0 else 0, device=device)
+    dist.broadcast(flag, src=0)
+    return bool(flag.item())
+
+
 def set_seed(seed):
     random.seed(seed)
     torch.manual_seed(seed)

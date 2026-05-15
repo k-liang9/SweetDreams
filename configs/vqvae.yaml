@@ -5,7 +5,7 @@ exp:
   run_name: vqvae
 
 data:
-  h5_path: data/old_breakout.h5
+  h5_path: data/breakout.h5
   seq_len: 1
   train_frac: 0.8
   val_frac: 0.1
@@ -16,6 +16,7 @@ train:
   batch_size: 256
   num_workers: 4
   device: auto
+  val_every_steps: 200
 
 optimizer:
   type: adam

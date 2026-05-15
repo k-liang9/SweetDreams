@@ -25,6 +25,7 @@ from train.utils import (
     aggregate_metrics,
     all_reduce_mean,
     build_scheduler,
+    check_stop_file,
     checkpoint_state,
     cleanup_distributed,
     get_device,
@@ -38,6 +39,8 @@ from train.utils import (
     save_checkpoint,
     set_seed,
 )
+
+STOP_FILE = ROOT / 'STOP'
 from data import AtariEpisodeDataset
 from tokenizer import VQVAE, vqvae_metrics
 
@@ -214,6 +217,7 @@ def run_epoch(
     step=0,
     include_reconstructions=False,
     fid=None,
+    step_callback=None,
 ):
     is_train = optimizer is not None
     model.train(is_train)
@@ -238,6 +242,9 @@ def run_epoch(
             metrics[f'{split}/lr'] = optimizer.param_groups[0]['lr']
             if run is not None and is_main_process():
                 run.log(prepare_metrics_for_log(metrics), step=step)
+            if step_callback is not None:
+                step_callback(step)
+                model.train(True)
         else:
             metrics = vqvae_metrics(
                 split,
@@ -313,14 +320,48 @@ def _run(cfg, device, local_rank):
             config=wandb_config,
         )
 
+    val_every_steps = int(cfg.train.get('val_every_steps') or 0)
+
     try:
         best_model_state = None
         step = 0
         next_val_reconstruction_step = VAL_RECONSTRUCTION_EVERY_STEPS
 
+        def validate(at_epoch, at_step):
+            nonlocal best_model_state, next_val_reconstruction_step
+            include_val_reconstructions = at_step >= next_val_reconstruction_step
+            while at_step >= next_val_reconstruction_step:
+                next_val_reconstruction_step += VAL_RECONSTRUCTION_EVERY_STEPS
+
+            with torch.no_grad():
+                val_metrics, _ = run_epoch(
+                    model,
+                    val_loader,
+                    'val',
+                    device,
+                    step=at_step,
+                    include_reconstructions=include_val_reconstructions,
+                )
+            if is_main_process() and run is not None:
+                run.log(prepare_metrics_for_log(val_metrics), step=at_step)
+
+            val_loss = val_metrics.get('val/recon_loss')
+            if torch.is_tensor(val_loss):
+                val_loss = val_loss.item()
+            if is_main_process() and val_loss is not None and (
+                best_model_state is None or val_loss < best_model_state['val_loss']
+            ):
+                best_model_state = checkpoint_state(
+                    at_epoch, val_loss, unwrap(model), optimizer, wandb_config
+                )
+
         for epoch in range(1, cfg.train.epochs + 1):
             if isinstance(train_loader.sampler, DistributedSampler):
                 train_loader.sampler.set_epoch(epoch)
+
+            def step_hook(s, _epoch=epoch):
+                if val_every_steps > 0 and s % val_every_steps == 0:
+                    validate(_epoch, s)
 
             _, step = run_epoch(
                 model,
@@ -330,36 +371,21 @@ def _run(cfg, device, local_rank):
                 optimizer=optimizer,
                 run=run,
                 step=step,
+                step_callback=step_hook if val_every_steps > 0 else None,
             )
 
-            include_val_reconstructions = step >= next_val_reconstruction_step
-            while step >= next_val_reconstruction_step:
-                next_val_reconstruction_step += VAL_RECONSTRUCTION_EVERY_STEPS
-
-            with torch.no_grad():
-                val_metrics, step = run_epoch(
-                    model,
-                    val_loader,
-                    'val',
-                    device,
-                    step=step,
-                    include_reconstructions=include_val_reconstructions,
-                )
-            if is_main_process() and run is not None:
-                run.log(prepare_metrics_for_log(val_metrics), step=step)
-
-            val_loss = val_metrics.get('val/recon_loss')
-            if torch.is_tensor(val_loss):
-                val_loss = val_loss.item()
-            if is_main_process() and val_loss is not None and (
-                best_model_state is None or val_loss < best_model_state['val_loss']
-            ):
-                best_model_state = checkpoint_state(
-                    epoch, val_loss, unwrap(model), optimizer, wandb_config
-                )
+            if val_every_steps == 0:
+                validate(epoch, step)
 
             if scheduler is not None:
                 scheduler.step()
+
+            if check_stop_file(STOP_FILE, device):
+                if is_main_process():
+                    print(f'[STOP] sentinel detected at {STOP_FILE}, ending training after epoch {epoch}')
+                    if STOP_FILE.exists():
+                        STOP_FILE.unlink()
+                break
 
         if is_main_process() and best_model_state is not None and run is not None:
             checkpoint_path = Path(run.dir) / 'best_model.pt'

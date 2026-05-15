@@ -5,7 +5,7 @@ exp:
   run_name: world_model
 
 data:
-  h5_path: data/old_breakout.h5
+  h5_path: data/breakout.h5
   seq_len: 16
   train_frac: 0.8
   val_frac: 0.1
@@ -19,8 +19,8 @@ train:
   batch_size: 32
   num_workers: 4
   device: auto
-  log_every: 100
   grad_clip_norm: 1.0
+  val_every_steps: 200
 
 optimizer:
   type: adamw

@@ -41,7 +41,7 @@ def parse_args():
             'erase them, and measure raw/encoder/token/reconstruction sensitivity.'
         )
     )
-    parser.add_argument('--h5-path', default='data/old_breakout.h5')
+    parser.add_argument('--h5-path', default='data/breakout.h5')
     parser.add_argument('--checkpoint-path', default=None)
     parser.add_argument('--output-dir', default='diagnostics/vqvae_ball')
     parser.add_argument('--device', default='auto')
