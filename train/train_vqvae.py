@@ -92,6 +92,9 @@ def make_loaders(cfg):
         'num_workers': cfg.train.num_workers,
         'pin_memory': torch.cuda.is_available(),
     }
+    if cfg.train.num_workers > 0:
+        loader_kwargs['persistent_workers'] = True
+        loader_kwargs['prefetch_factor'] = 4
     train_loader = DataLoader(
         train_set,
         shuffle=(train_sampler is None),

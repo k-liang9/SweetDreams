@@ -9,12 +9,13 @@ data:
   seq_len: 1
   train_frac: 0.8
   val_frac: 0.1
+  # TODO: need to change split fractions
 
 train:
   seed: 0
   epochs: 50
-  batch_size: 256
-  num_workers: 4
+  batch_size: 64
+  num_workers: 8
   device: auto
   val_every_steps: 200
 
@@ -40,8 +41,8 @@ model:
     commitment_cost: 1
     init:
       type: kmeans
-      num_batches: 10
-      num_iters: 20
+      num_batches: 20
+      num_iters: 40
       chunk_size: 65536
     ema:
       decay: 0.99
