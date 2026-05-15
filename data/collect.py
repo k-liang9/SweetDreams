@@ -200,7 +200,7 @@ def _run_worker(args):
 
 def collect_episodes(
     game="ALE/Breakout-v5",
-    n_episodes=150,
+    n_episodes=250,
     output_path="data/breakout.h5",
     policy="mixed",
     epsilon=0.05,
@@ -298,15 +298,15 @@ def collect_episodes(
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--game", default="ALE/Breakout-v5")
-    p.add_argument("--n-episodes", type=int, default=150)
+    p.add_argument("--n-episodes", type=int, default=250)
     p.add_argument("--output-path", default="data/breakout.h5")
     p.add_argument("--policy", choices=["random", "pretrained", "mixed"], default="mixed")
     p.add_argument("--epsilon", type=float, default=0.05,
                    help="Random action probability for the 70%% noisy pretrained bucket.")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--frame-size", type=int, default=64)
-    p.add_argument("--max-episode-steps", type=int, default=None,
-                   help="Optional collector-side cap. Helpful for long pretrained Breakout episodes.")
+    p.add_argument("--max-episode-steps", type=int, default=5000,
+                   help="Collector-side cap. Past ~20k frames Breakout's palette cycles and tints the rendered RGB.")
     p.add_argument("--no-fire-on-reset", action="store_true")
     p.add_argument("--pretrained-device", default="cpu",
                    help="Each worker loads its own copy; CPU is recommended for multiprocessing.")
