@@ -12,16 +12,25 @@ import torch
 from hydra.utils import to_absolute_path
 from omegaconf import DictConfig, OmegaConf
 from torch import optim
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader, random_split
+from torch.utils.data.distributed import DistributedSampler
 import tqdm
 import wandb
 
 from train.utils import (
     aggregate_metrics,
+    all_reduce_mean,
     build_scheduler,
     checkpoint_state,
+    cleanup_distributed,
     get_device,
+    get_rank,
+    get_world_size,
+    init_distributed,
+    is_distributed,
+    is_main_process,
     move_to_device,
     prepare_metrics_for_log,
     save_checkpoint,
@@ -30,6 +39,10 @@ from train.utils import (
 from data import AtariEpisodeDataset
 from tokenizer import VQVAE
 from world_model import WorldModel, world_model_loss, world_model_metrics
+
+
+def unwrap(model):
+    return model.module if isinstance(model, DDP) else model
 
 
 def make_loaders(cfg):
@@ -51,14 +64,31 @@ def make_loaders(cfg):
         generator=generator,
     )
 
+    world_size = get_world_size()
+    rank = get_rank()
+
+    def sampler(subset, shuffle):
+        if world_size > 1:
+            return DistributedSampler(subset, num_replicas=world_size, rank=rank, shuffle=shuffle)
+        return None
+
+    train_sampler = sampler(train_set, shuffle=True)
+    val_sampler = sampler(val_set, shuffle=False)
+    test_sampler = sampler(test_set, shuffle=False)
+
     loader_kwargs = {
         'batch_size': cfg.train.batch_size,
         'num_workers': cfg.train.num_workers,
         'pin_memory': torch.cuda.is_available(),
     }
-    train_loader = DataLoader(train_set, shuffle=True, **loader_kwargs)
-    val_loader = DataLoader(val_set, shuffle=False, **loader_kwargs)
-    test_loader = DataLoader(test_set, shuffle=False, **loader_kwargs)
+    train_loader = DataLoader(
+        train_set,
+        shuffle=(train_sampler is None),
+        sampler=train_sampler,
+        **loader_kwargs,
+    )
+    val_loader = DataLoader(val_set, shuffle=False, sampler=val_sampler, **loader_kwargs)
+    test_loader = DataLoader(test_set, shuffle=False, sampler=test_sampler, **loader_kwargs)
     return train_loader, val_loader, test_loader
 
 
@@ -140,6 +170,24 @@ def make_optimizer(model, cfg):
     raise ValueError(f'Unsupported optimizer type: {cfg.optimizer.type}')
 
 
+def all_reduce_metrics(metrics):
+    if not is_distributed():
+        return metrics
+    reduced = {}
+    for key, value in metrics.items():
+        if torch.is_tensor(value) and value.numel() == 1 and value.is_floating_point():
+            value = value.detach().clone()
+            all_reduce_mean(value)
+            reduced[key] = value
+        elif isinstance(value, (int, float)):
+            tensor = torch.tensor(float(value), device='cuda' if torch.cuda.is_available() else 'cpu')
+            all_reduce_mean(tensor)
+            reduced[key] = tensor.item()
+        else:
+            reduced[key] = value
+    return reduced
+
+
 def run_epoch(
     tokenizer,
     world_model,
@@ -155,9 +203,15 @@ def run_epoch(
     world_model.train(is_train)
     tokenizer.eval()
     metrics_list = []
-    progress = tqdm.tqdm(loader, total=len(loader), desc=f'{split} batches')
+    progress = tqdm.tqdm(
+        loader,
+        total=len(loader),
+        desc=f'{split} batches',
+        disable=not is_main_process(),
+    )
     log_every = cfg.train.get('log_every', 1)
     grad_clip_norm = cfg.train.get('grad_clip_norm')
+    raw_world_model = unwrap(world_model)
 
     for batch in progress:
         with torch.set_grad_enabled(is_train):
@@ -168,7 +222,7 @@ def run_epoch(
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 if grad_clip_norm is not None and grad_clip_norm > 0:
-                    clip_grad_norm_(world_model.parameters(), grad_clip_norm)
+                    clip_grad_norm_(raw_world_model.parameters(), grad_clip_norm)
                 optimizer.step()
                 step += 1
 
@@ -177,14 +231,16 @@ def run_epoch(
 
         if is_train:
             should_log = log_every <= 1 or step % log_every == 0
-            if run is not None and should_log:
+            if run is not None and should_log and is_main_process():
                 metrics[f'{split}/lr'] = optimizer.param_groups[0]['lr']
                 run.log(prepare_metrics_for_log(metrics), step=step)
         else:
             metrics_list.append(metrics)
 
     if not is_train:
-        return aggregate_metrics(metrics_list), step
+        metrics = aggregate_metrics(metrics_list)
+        metrics = all_reduce_metrics(metrics)
+        return metrics, step
     return {}, step
 
 
@@ -195,37 +251,64 @@ def validate_tokenizer_shape(tokenizer, loader, device, cfg):
 
     batch = next(iter(loader))
     frame_tokens, _ = tokenize_batch(tokenizer, batch, device, cfg)
-    print(
-        f'World-model tokenization: {frame_tokens.size(1)} frames, '
-        f'{frame_tokens.size(-1)} tokens/frame, {cfg.model.num_frame_tokens} token classes'
-    )
+    if is_main_process():
+        print(
+            f'World-model tokenization: {frame_tokens.size(1)} frames, '
+            f'{frame_tokens.size(-1)} tokens/frame, {cfg.model.num_frame_tokens} token classes'
+        )
 
 
 @hydra.main(version_base=None, config_path='../configs', config_name='world_model')
 def main(cfg: DictConfig):
-    set_seed(cfg.train.seed)
+    local_rank, _ = init_distributed()
+    set_seed(cfg.train.seed + get_rank())
     device = get_device(cfg.train.device)
+    if is_distributed() and torch.cuda.is_available():
+        device = torch.device(f'cuda:{local_rank}')
+    if device.type == 'cuda':
+        torch.set_float32_matmul_precision('high')
 
+    try:
+        _run(cfg, device, local_rank)
+    finally:
+        cleanup_distributed()
+
+
+def _run(cfg, device, local_rank):
     train_loader, val_loader, test_loader = make_loaders(cfg)
     tokenizer = load_tokenizer(cfg, device)
     validate_tokenizer_shape(tokenizer, train_loader, device, cfg)
 
     world_model = WorldModel(cfg).to(device)
+    if is_distributed():
+        world_model = DDP(
+            world_model,
+            device_ids=[local_rank] if torch.cuda.is_available() else None,
+            broadcast_buffers=False,
+        )
+
     optimizer = make_optimizer(world_model, cfg)
     scheduler = build_scheduler(optimizer, cfg.scheduler)
 
     wandb_config = OmegaConf.to_container(cfg, resolve=True)
-    with wandb.init(
-        project=str(cfg.exp.project),
-        name=str(cfg.exp.run_name),
-        group=str(cfg.exp.group),
-        entity=str(cfg.exp.entity),
-        config=wandb_config,
-    ) as run:
+    run = None
+    if is_main_process():
+        run = wandb.init(
+            project=str(cfg.exp.project),
+            name=str(cfg.exp.run_name),
+            group=str(cfg.exp.group),
+            entity=str(cfg.exp.entity),
+            config=wandb_config,
+        )
+
+    try:
         best_model_state = None
         step = 0
 
         for epoch in range(1, cfg.train.epochs + 1):
+            if isinstance(train_loader.sampler, DistributedSampler):
+                train_loader.sampler.set_epoch(epoch)
+
             _, step = run_epoch(
                 tokenizer,
                 world_model,
@@ -249,7 +332,7 @@ def main(cfg: DictConfig):
                     step=step,
                 )
 
-            if val_metrics:
+            if val_metrics and is_main_process() and run is not None:
                 val_metrics['epoch'] = epoch
                 run.log(prepare_metrics_for_log(val_metrics), step=step)
                 val_loss = val_metrics.get('val/loss')
@@ -261,7 +344,7 @@ def main(cfg: DictConfig):
                     best_model_state = checkpoint_state(
                         epoch,
                         val_loss,
-                        world_model,
+                        unwrap(world_model),
                         optimizer,
                         wandb_config,
                     )
@@ -269,7 +352,7 @@ def main(cfg: DictConfig):
             if scheduler is not None:
                 scheduler.step()
 
-        if best_model_state is not None:
+        if is_main_process() and best_model_state is not None and run is not None:
             checkpoint_path = Path(run.dir) / 'best_model.pt'
             save_checkpoint(best_model_state, checkpoint_path)
 
@@ -284,7 +367,11 @@ def main(cfg: DictConfig):
                     cfg,
                     step=step,
                 )
-            run.log(prepare_metrics_for_log(test_metrics), step=step)
+            if is_main_process() and run is not None:
+                run.log(prepare_metrics_for_log(test_metrics), step=step)
+    finally:
+        if run is not None:
+            run.finish()
 
 
 if __name__ == '__main__':
