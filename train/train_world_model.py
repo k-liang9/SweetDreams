@@ -198,15 +198,17 @@ def run_epoch(
     run=None,
     step=0,
     step_callback=None,
+    epoch=None,
 ):
     is_train = optimizer is not None
     world_model.train(is_train)
     tokenizer.eval()
     metrics_list = []
+    desc = f'[epoch {epoch}] {split} batches' if epoch is not None else f'{split} batches'
     progress = tqdm.tqdm(
         loader,
         total=len(loader),
-        desc=f'{split} batches',
+        desc=desc,
         disable=not is_main_process(),
     )
     grad_clip_norm = cfg.train.get('grad_clip_norm')
@@ -319,6 +321,7 @@ def _run(cfg, device, local_rank):
                     device,
                     cfg,
                     step=at_step,
+                    epoch=at_epoch,
                 )
 
             if val_metrics and is_main_process() and run is not None:
@@ -357,6 +360,7 @@ def _run(cfg, device, local_rank):
                 run=run,
                 step=step,
                 step_callback=step_hook if val_every_steps > 0 else None,
+                epoch=epoch,
             )
 
             if val_every_steps == 0:

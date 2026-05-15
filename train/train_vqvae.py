@@ -221,11 +221,12 @@ def run_epoch(
     include_reconstructions=False,
     fid=None,
     step_callback=None,
+    epoch=None,
 ):
     is_train = optimizer is not None
     model.train(is_train)
     metrics_list = []
-    desc = f'{split} batches'
+    desc = f'[epoch {epoch}] {split} batches' if epoch is not None else f'{split} batches'
     raw_model = unwrap(model)
 
     recon_batch_idx = None
@@ -348,6 +349,7 @@ def _run(cfg, device, local_rank):
                     device,
                     step=at_step,
                     include_reconstructions=include_val_reconstructions,
+                    epoch=at_epoch,
                 )
             if is_main_process() and run is not None:
                 run.log(prepare_metrics_for_log(val_metrics), step=at_step)
@@ -379,6 +381,7 @@ def _run(cfg, device, local_rank):
                 run=run,
                 step=step,
                 step_callback=step_hook if val_every_steps > 0 else None,
+                epoch=epoch,
             )
 
             if val_every_steps == 0:

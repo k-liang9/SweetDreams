@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
+import time
 from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -11,6 +13,8 @@ import cv2
 import h5py
 import numpy as np
 from PIL import Image, ImageDraw
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -270,9 +274,15 @@ def save_contact_sheet(frames: list[np.ndarray], output_path: Path, rng, cols=8,
 
 def main():
     args = parse_args()
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        datefmt="%H:%M:%S",
+    )
     rng = np.random.default_rng(args.seed)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    logger.info("Output directory: %s", output_dir)
 
     exact_hashes = Counter()
     coarse_hashes = Counter()
@@ -304,8 +314,15 @@ def main():
             episode_keys = episode_keys[: args.max_episodes]
 
         dataset_attrs = json_ready(dict(file.attrs.items()))
+        logger.info(
+            "Scanning %d episodes from %s (max_episodes=%s)",
+            len(episode_keys),
+            args.h5_path,
+            args.max_episodes,
+        )
 
-        for episode_key in episode_keys:
+        scan_start = time.monotonic()
+        for episode_index, episode_key in enumerate(episode_keys):
             group = file[episode_key]
             frames = group["frames"]
             actions = group["actions"][:]
@@ -371,6 +388,27 @@ def main():
             episode_brick_layout_counts.append(len(episode_brick_hashes))
             episode_brick_pixel_ranges.append(int(max(episode_brick_pixels) - min(episode_brick_pixels)))
 
+            elapsed = time.monotonic() - scan_start
+            fps = total_frames / elapsed if elapsed > 0 else 0.0
+            logger.info(
+                "Episode %d/%d (%s): frames=%d return=%.2f rewards=%d brick_layouts=%d | "
+                "cumulative frames=%d ball_det=%.1f%% paddle_det=%.1f%% elapsed=%.1fs (%.0f fps)",
+                episode_index + 1,
+                len(episode_keys),
+                episode_key,
+                n_frames,
+                episode_return,
+                reward_count,
+                len(episode_brick_hashes),
+                total_frames,
+                100 * ball_detected / max(1, total_frames),
+                100 * paddle_detected / max(1, total_frames),
+                elapsed,
+                fps,
+            )
+
+    logger.info("Scan complete: %d episodes, %d frames in %.1fs", len(episode_lengths), total_frames, time.monotonic() - scan_start)
+    logger.info("Computing pairwise L1 distance over %d sampled pairs", args.pair_samples)
     pairwise = sampled_pairwise_l1(sample_frames, args.pair_samples, rng)
     exact_unique = len(exact_hashes)
     coarse_unique = len(coarse_hashes)
