@@ -103,7 +103,9 @@ def aggregate_metrics(metrics_list):
         return {}
 
     aggregated = {}
-    keys = metrics_list[0].keys()
+    keys = set()
+    for metrics in metrics_list:
+        keys.update(metrics.keys())
     for key in keys:
         values = [metrics[key] for metrics in metrics_list if key in metrics]
         if not values:

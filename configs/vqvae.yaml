@@ -20,7 +20,7 @@ train:
 
 optimizer:
   type: adam
-  lr: 0.0001
+  lr: 0.00014
 
 scheduler:
   type: none

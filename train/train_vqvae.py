@@ -228,6 +228,10 @@ def run_epoch(
     desc = f'{split} batches'
     raw_model = unwrap(model)
 
+    recon_batch_idx = None
+    if include_reconstructions and is_main_process() and len(loader) > 0:
+        recon_batch_idx = int(torch.randint(len(loader), (1,)).item())
+
     for batch_idx, batch in enumerate(tqdm.tqdm(loader, total=len(loader), desc=desc, disable=not is_main_process())):
         frames = move_to_device(batch_frames(batch), device)
         frames = raw_model.flatten_frames(frames)
@@ -254,7 +258,7 @@ def run_epoch(
                 out,
                 frames,
                 num_embeddings=raw_model.quantizer.K,
-                include_reconstructions=include_reconstructions and not metrics_list and is_main_process(),
+                include_reconstructions=(batch_idx == recon_batch_idx),
                 reconstruction_examples=1,
             )
             if fid is not None:

@@ -16,8 +16,9 @@ def codebook_metrics(indices, num_embeddings):
 
 def reconstruction_grid(pred, target, n=1):
     n = min(n, pred.shape[0], target.shape[0])
-    originals = target[:n].detach().cpu().clamp(0, 1)
-    reconstructions = pred[:n].detach().cpu().clamp(0, 1)
+    indices = torch.randperm(pred.shape[0])[:n]
+    originals = target[indices].detach().cpu().clamp(0, 1)
+    reconstructions = pred[indices].detach().cpu().clamp(0, 1)
     grid = torch.cat([originals, reconstructions], dim=0)
     C, H, W = grid.shape[1:]
     grid = grid.reshape(2, n, C, H, W).permute(0, 3, 1, 4, 2)
