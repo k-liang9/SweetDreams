@@ -156,10 +156,12 @@ class Decoder(nn.Module):
             nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1),  # 8 → 8
             nn.LayerNorm([hidden_dim, 8, 8]),
             nn.SiLU(),
+            SpatialSelfAttention(hidden_dim, num_heads=4),
             nn.Upsample(scale_factor=2, mode='nearest'),
             nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1),  # 8 → 16
             nn.LayerNorm([hidden_dim, 16, 16]),
             nn.SiLU(),
+            SpatialSelfAttention(hidden_dim, num_heads=4),
             nn.Upsample(scale_factor=2, mode='nearest'),
             nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1),  # 16 → 32
             nn.LayerNorm([hidden_dim, 32, 32]),
