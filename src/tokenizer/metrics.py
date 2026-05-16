@@ -31,6 +31,21 @@ def reconstruction_grid(pred, target, n=1):
     return wandb.Image(grid.numpy())
 
 
+def generator_metrics(split, g_loss, weight):
+    return {
+        f'{split}/g_loss': g_loss.detach(),
+        f'{split}/disc_weight': weight.detach(),
+    }
+
+
+def discriminator_metrics(split, d_loss, real_logits, fake_logits):
+    return {
+        f'{split}/d_loss': d_loss.detach(),
+        f'{split}/d_real': real_logits.detach().mean(),
+        f'{split}/d_fake': fake_logits.detach().mean(),
+    }
+
+
 def vqvae_metrics(
     split,
     out,

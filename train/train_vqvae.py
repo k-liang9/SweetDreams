@@ -51,7 +51,9 @@ from tokenizer import (
     VQVAE,
     adaptive_disc_weight,
     discriminator_hinge_loss,
+    discriminator_metrics,
     generator_hinge_loss,
+    generator_metrics,
     vqvae_metrics,
 )
 
@@ -283,8 +285,7 @@ def run_epoch(
 
                     weight = d_w * disc_cfg['weight']
                     gen_loss = out['loss'] + weight * g_loss
-                    disc_metrics[f'{split}/g_loss'] = g_loss.detach()
-                    disc_metrics[f'{split}/disc_weight'] = weight.detach()
+                    disc_metrics.update(generator_metrics(split, g_loss, weight))
 
                 optimizer.zero_grad()
                 gen_loss.backward()
@@ -298,9 +299,9 @@ def run_epoch(
                     disc_optimizer.zero_grad()
                     d_loss.backward()
                     disc_optimizer.step()
-                    disc_metrics[f'{split}/d_loss'] = d_loss.detach()
-                    disc_metrics[f'{split}/d_real'] = real_logits.detach().mean()
-                    disc_metrics[f'{split}/d_fake'] = fake_logits_d.detach().mean()
+                    disc_metrics.update(
+                        discriminator_metrics(split, d_loss, real_logits, fake_logits_d)
+                    )
 
                 step += 1
 
