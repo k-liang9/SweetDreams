@@ -54,6 +54,7 @@ from tokenizer import (
     discriminator_metrics,
     generator_hinge_loss,
     generator_metrics,
+    r1_gradient_penalty,
     vqvae_metrics,
 )
 
@@ -271,6 +272,7 @@ def run_epoch(
                 gen_loss = out['loss']
 
                 if gan_active:
+                    assert disc is not None and disc_cfg is not None and disc_optimizer is not None
                     set_requires_grad(disc, False)
                     fake_logits = disc(out['pred'])
                     g_loss = generator_hinge_loss(fake_logits)
@@ -292,15 +294,25 @@ def run_epoch(
                 optimizer.step()
 
                 if gan_active:
+                    assert disc is not None and disc_cfg is not None and disc_optimizer is not None
+                if gan_active and step % disc_cfg['update_every'] == 0:
                     set_requires_grad(disc, True)
-                    real_logits = disc(frames)
+                    use_r1 = disc_cfg['r1_weight'] > 0
+                    real = frames.detach().requires_grad_(use_r1)
+                    real_logits = disc(real)
                     fake_logits_d = disc(out['pred'].detach())
                     d_loss = discriminator_hinge_loss(real_logits, fake_logits_d)
+
+                    r1 = None
+                    if use_r1:
+                        r1 = r1_gradient_penalty(real_logits, real)
+                        d_loss = d_loss + 0.5 * disc_cfg['r1_weight'] * r1
+
                     disc_optimizer.zero_grad()
                     d_loss.backward()
                     disc_optimizer.step()
                     disc_metrics.update(
-                        discriminator_metrics(split, d_loss, real_logits, fake_logits_d)
+                        discriminator_metrics(split, d_loss, real_logits, fake_logits_d, r1_penalty=r1)
                     )
 
                 step += 1
@@ -401,6 +413,8 @@ def _run(cfg, device, local_rank):
             'weight': float(cfg.loss.disc_weight),
             'warmup_steps': int(cfg.loss.disc_warmup_steps),
             'adaptive': bool(cfg.loss.disc_adaptive),
+            'r1_weight': float(cfg.loss.get('r1_weight', 0.0)),
+            'update_every': int(cfg.discriminator.get('update_every', 1)),
         }
 
     wandb_config = OmegaConf.to_container(cfg, resolve=True)

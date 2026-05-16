@@ -79,3 +79,12 @@ def adaptive_disc_weight(nll_loss, g_loss, last_layer, max_weight=1e4):
     g_grads = autograd.grad(g_loss, last_layer, retain_graph=True)[0]
     weight = nll_grads.norm() / (g_grads.norm() + 1e-4)
     return weight.clamp(0.0, max_weight).detach()
+
+
+def r1_gradient_penalty(real_logits, real_images):
+    """R1 regularization: penalize discriminator gradient norm on real images.
+    Caller must set real_images.requires_grad_(True) before computing real_logits."""
+    grad_real = autograd.grad(
+        real_logits.sum(), real_images, create_graph=True
+    )[0]
+    return grad_real.pow(2).flatten(1).sum(1).mean()

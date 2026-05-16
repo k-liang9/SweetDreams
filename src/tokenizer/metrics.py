@@ -38,12 +38,15 @@ def generator_metrics(split, g_loss, weight):
     }
 
 
-def discriminator_metrics(split, d_loss, real_logits, fake_logits):
-    return {
+def discriminator_metrics(split, d_loss, real_logits, fake_logits, r1_penalty=None):
+    metrics = {
         f'{split}/d_loss': d_loss.detach(),
         f'{split}/d_real': real_logits.detach().mean(),
         f'{split}/d_fake': fake_logits.detach().mean(),
     }
+    if r1_penalty is not None:
+        metrics[f'{split}/r1_penalty'] = r1_penalty.detach()
+    return metrics
 
 
 def vqvae_metrics(
