@@ -1,5 +1,8 @@
 from pathlib import Path
 import sys
+import os
+
+os.environ.setdefault('NCCL_P2P_DISABLE', '1')
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / 'src'

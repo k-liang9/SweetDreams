@@ -1,0 +1,4 @@
+[2026-05-16 06:24:56,114][HYDRA] Launching 3 jobs locally
+[2026-05-16 06:24:56,114][HYDRA] 	#0 : exp.run_name=world\ model\ lrs optimizer.lr=0.001
+[2026-05-16 06:25:01,230][HYDRA] Launching 3 jobs locally
+[2026-05-16 06:25:01,231][HYDRA] 	#0 : exp.run_name=world\ model\ lrs optimizer.lr=0.001
