@@ -30,13 +30,13 @@ scheduler:
 loss:
   perceptual_weight: 0.5
   perceptual_net: vgg
-  disc_weight: 0.1
-  disc_warmup_steps: 5000
-  disc_adaptive: true
+  disc_weight: 0.05
+  disc_warmup_steps: 20000
+  disc_adaptive: false
 
 discriminator:
   enabled: true
-  base_channels: 64
+  base_channels: 32
   num_layers: 3
   max_channels: 512
   lr: 0.00014

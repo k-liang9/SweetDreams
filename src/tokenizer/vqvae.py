@@ -49,11 +49,11 @@ class Encoder(nn.Module):
             nn.ReLU(),
             SpatialSelfAttention(hidden_dim, num_heads=4),
             
-            nn.Conv2d(hidden_dim, latent_dim, kernel_size=5, stride=1, padding=0), # 8 -> 4
+            nn.Conv2d(hidden_dim, latent_dim, kernel_size=3, stride=1, padding=0), # 8 -> 6
         )
 
     def forward(self, x):
-        return self.net(x) # (B, latent_dim, 4, 4)
+        return self.net(x) # (B, latent_dim, 6, 6)
     
 class VectorQuantizer(nn.Module):
     def __init__(self, cfg):
@@ -150,7 +150,7 @@ class Decoder(nn.Module):
         latent_dim = cfg.model.latent_dim
         self.net = nn.Sequential(
             nn.Upsample(size=(8, 8), mode='nearest'),
-            nn.Conv2d(latent_dim, hidden_dim, kernel_size=3, stride=1, padding=1),  # 4 → 8
+            nn.Conv2d(latent_dim, hidden_dim, kernel_size=3, stride=1, padding=1),  # 6 → 8
             nn.LayerNorm([hidden_dim, 8, 8]),
             nn.SiLU(),
             nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1),  # 8 → 8
