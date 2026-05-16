@@ -17,4 +17,4 @@ set -euo pipefail
 eval "$(conda shell.bash hook)"
 conda activate sweetdreams
 
-torchrun --nproc_per_node=2 train/train_vqvae.py -m exp.run_name='4x4 512 codebook' loss.perceptual_weight=0.75,1.0
+torchrun --nproc_per_node=2 train/train_vqvae.py -m exp.run_name='6x6'
