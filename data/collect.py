@@ -221,8 +221,8 @@ def collect_episodes(
 
     plan_rng = np.random.default_rng(seed)
     if policy == "mixed":
-        n_random = round(0.10 * n_episodes)
-        n_det = round(0.20 * n_episodes)
+        n_random = round(0.01 * n_episodes)
+        n_det = round(0.29 * n_episodes)
         n_noisy = n_episodes - n_random - n_det
         episode_policies = (
             ["pretrained_noisy"] * n_noisy
