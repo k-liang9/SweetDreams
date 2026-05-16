@@ -15,7 +15,7 @@ tokenizer:
 
 train:
   seed: 0
-  epochs: 50
+  epochs: 15
   batch_size: 32
   num_workers: 8
   device: auto
