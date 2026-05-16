@@ -1,4 +1,5 @@
 import torch
+import torch.autograd as autograd
 import torch.nn as nn
 from torch.nn import functional as F
 
@@ -60,3 +61,21 @@ def vqvae_loss(pred, target, z, z_q, commitment_cost, perceptual=None, perceptua
         'perceptual_loss': perceptual_loss,
         **loss_dict,
     }
+
+
+def discriminator_hinge_loss(real_logits, fake_logits):
+    real_loss = F.relu(1.0 - real_logits).mean()
+    fake_loss = F.relu(1.0 + fake_logits).mean()
+    return 0.5 * (real_loss + fake_loss)
+
+
+def generator_hinge_loss(fake_logits):
+    return -fake_logits.mean()
+
+
+def adaptive_disc_weight(nll_loss, g_loss, last_layer, max_weight=1e4):
+    """VQ-GAN adaptive weight: ||grad(nll)|| / ||grad(g_loss)|| at decoder's last layer."""
+    nll_grads = autograd.grad(nll_loss, last_layer, retain_graph=True)[0]
+    g_grads = autograd.grad(g_loss, last_layer, retain_graph=True)[0]
+    weight = nll_grads.norm() / (g_grads.norm() + 1e-4)
+    return weight.clamp(0.0, max_weight).detach()

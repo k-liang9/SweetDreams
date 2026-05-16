@@ -46,7 +46,14 @@ from train.utils import (
 
 STOP_FILE = ROOT / 'STOP'
 from data import AtariEpisodeDataset
-from tokenizer import VQVAE, vqvae_metrics
+from tokenizer import (
+    NLayerDiscriminator,
+    VQVAE,
+    adaptive_disc_weight,
+    discriminator_hinge_loss,
+    generator_hinge_loss,
+    vqvae_metrics,
+)
 
 
 def unwrap(model):
@@ -214,6 +221,11 @@ def all_reduce_metrics(metrics):
     return reduced
 
 
+def set_requires_grad(module, requires_grad):
+    for p in module.parameters():
+        p.requires_grad_(requires_grad)
+
+
 def run_epoch(
     model,
     loader,
@@ -226,12 +238,19 @@ def run_epoch(
     fid=None,
     step_callback=None,
     epoch=None,
+    disc=None,
+    disc_optimizer=None,
+    disc_cfg=None,
+    perceptual_weight=0.0,
 ):
     is_train = optimizer is not None
     model.train(is_train)
+    if disc is not None:
+        disc.train(is_train)
     metrics_list = []
     desc = f'[epoch {epoch}] {split} batches' if epoch is not None else f'{split} batches'
     raw_model = unwrap(model)
+    raw_disc = unwrap(disc) if disc is not None else None
 
     recon_batch_idx = None
     if include_reconstructions and is_main_process() and len(loader) > 0:
@@ -243,20 +262,59 @@ def run_epoch(
 
         with torch.set_grad_enabled(is_train):
             out = model(frames)
+            disc_metrics = {}
+
             if is_train:
+                gan_active = disc is not None and step >= disc_cfg['warmup_steps']
+                gen_loss = out['loss']
+
+                if gan_active:
+                    set_requires_grad(disc, False)
+                    fake_logits = disc(out['pred'])
+                    g_loss = generator_hinge_loss(fake_logits)
+
+                    if disc_cfg['adaptive']:
+                        nll = out['recon_loss'] + perceptual_weight * out['perceptual_loss']
+                        d_w = adaptive_disc_weight(
+                            nll, g_loss, raw_model.decoder.net[-2].weight
+                        )
+                    else:
+                        d_w = torch.tensor(1.0, device=frames.device)
+
+                    weight = d_w * disc_cfg['weight']
+                    gen_loss = out['loss'] + weight * g_loss
+                    disc_metrics[f'{split}/g_loss'] = g_loss.detach()
+                    disc_metrics[f'{split}/disc_weight'] = weight.detach()
+
                 optimizer.zero_grad()
-                out['loss'].backward()
+                gen_loss.backward()
                 optimizer.step()
+
+                if gan_active:
+                    set_requires_grad(disc, True)
+                    real_logits = disc(frames)
+                    fake_logits_d = disc(out['pred'].detach())
+                    d_loss = discriminator_hinge_loss(real_logits, fake_logits_d)
+                    disc_optimizer.zero_grad()
+                    d_loss.backward()
+                    disc_optimizer.step()
+                    disc_metrics[f'{split}/d_loss'] = d_loss.detach()
+                    disc_metrics[f'{split}/d_real'] = real_logits.detach().mean()
+                    disc_metrics[f'{split}/d_fake'] = fake_logits_d.detach().mean()
+
                 step += 1
 
         if is_train:
             metrics = vqvae_metrics(split, out, frames, num_embeddings=raw_model.quantizer.K)
             metrics[f'{split}/lr'] = optimizer.param_groups[0]['lr']
+            metrics.update(disc_metrics)
             if run is not None and is_main_process():
                 run.log(prepare_metrics_for_log(metrics), step=step)
             if step_callback is not None:
                 step_callback(step)
                 model.train(True)
+                if disc is not None:
+                    disc.train(True)
         else:
             metrics = vqvae_metrics(
                 split,
@@ -320,6 +378,29 @@ def _run(cfg, device, local_rank):
         raise ValueError(f'Unsupported optimizer type: {cfg.optimizer.type}')
     optimizer = optim.Adam(model.parameters(), lr=cfg.optimizer.lr)
     scheduler = build_scheduler(optimizer, cfg.scheduler)
+
+    disc = None
+    disc_optimizer = None
+    disc_cfg = None
+    perceptual_weight = float(cfg.loss.perceptual_weight)
+    if cfg.get('discriminator') is not None and cfg.discriminator.get('enabled', False):
+        disc = NLayerDiscriminator(cfg).to(device)
+        if is_distributed():
+            disc = DDP(
+                disc,
+                device_ids=[local_rank] if torch.cuda.is_available() else None,
+                broadcast_buffers=False,
+            )
+        disc_optimizer = optim.Adam(
+            disc.parameters(),
+            lr=cfg.discriminator.lr,
+            betas=(cfg.discriminator.beta1, cfg.discriminator.beta2),
+        )
+        disc_cfg = {
+            'weight': float(cfg.loss.disc_weight),
+            'warmup_steps': int(cfg.loss.disc_warmup_steps),
+            'adaptive': bool(cfg.loss.disc_adaptive),
+        }
 
     wandb_config = OmegaConf.to_container(cfg, resolve=True)
     run = None
@@ -386,6 +467,10 @@ def _run(cfg, device, local_rank):
                 step=step,
                 step_callback=step_hook if val_every_steps > 0 else None,
                 epoch=epoch,
+                disc=disc,
+                disc_optimizer=disc_optimizer,
+                disc_cfg=disc_cfg,
+                perceptual_weight=perceptual_weight,
             )
 
             if val_every_steps == 0:
