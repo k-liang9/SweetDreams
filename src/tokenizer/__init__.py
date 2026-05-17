@@ -1,8 +1,6 @@
 from tokenizer.discriminator import NLayerDiscriminator
 from tokenizer.losses import (
     adaptive_disc_weight,
-    ball_aux_loss,
-    compute_ball_mask,
     discriminator_hinge_loss,
     generator_hinge_loss,
     r1_gradient_penalty,
@@ -26,9 +24,7 @@ __all__ = [
     'VQVAE',
     'VectorQuantizer',
     'adaptive_disc_weight',
-    'ball_aux_loss',
     'codebook_metrics',
-    'compute_ball_mask',
     'discriminator_hinge_loss',
     'discriminator_metrics',
     'generator_hinge_loss',

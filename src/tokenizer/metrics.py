@@ -76,9 +76,6 @@ def vqvae_metrics(
             f'{split}/codebook_utilization': codebook_utilization,
         }
 
-    if 'ball_loss' in out:
-        metrics[f'{split}/ball_loss'] = out['ball_loss']
-
     if include_reconstructions:
         image_grid = reconstruction_grid(out['pred'], target, n=reconstruction_examples)
         if image_grid is not None:

@@ -50,7 +50,6 @@ from tokenizer import (
     NLayerDiscriminator,
     VQVAE,
     adaptive_disc_weight,
-    compute_ball_mask,
     discriminator_hinge_loss,
     discriminator_metrics,
     generator_hinge_loss,
@@ -246,9 +245,6 @@ def run_epoch(
     disc_optimizer=None,
     disc_cfg=None,
     perceptual_weight=0.0,
-    ball_threshold=0.05,
-    ball_paddle_y_frac=0.85,
-    ball_enabled=False,
 ):
     is_train = optimizer is not None
     model.train(is_train)
@@ -265,19 +261,10 @@ def run_epoch(
 
     for batch_idx, batch in enumerate(tqdm.tqdm(loader, total=len(loader), desc=desc, disable=not is_main_process())):
         frames = move_to_device(batch_frames(batch), device)
-
-        ball_mask = None
-        if ball_enabled and frames.dim() == 5 and frames.shape[1] >= 2:
-            mask_seq = compute_ball_mask(
-                frames, threshold=ball_threshold, paddle_y_frac=ball_paddle_y_frac
-            )
-            ball_mask = mask_seq[:, -1]
-            frames = frames[:, -1]
-
         frames = raw_model.flatten_frames(frames)
 
         with torch.set_grad_enabled(is_train):
-            out = model(frames, ball_mask=ball_mask)
+            out = model(frames)
             disc_metrics = {}
 
             if is_train:
@@ -409,10 +396,6 @@ def _run(cfg, device, local_rank):
     disc_optimizer = None
     disc_cfg = None
     perceptual_weight = float(cfg.loss.perceptual_weight)
-    ball_weight = float(cfg.loss.get('ball_weight', 0.0))
-    ball_threshold = float(cfg.loss.get('ball_threshold', 0.05))
-    ball_paddle_y_frac = float(cfg.loss.get('ball_paddle_y_frac', 0.85))
-    ball_enabled = ball_weight > 0
     if cfg.get('discriminator') is not None and cfg.discriminator.get('enabled', False):
         disc = NLayerDiscriminator(cfg).to(device)
         if is_distributed():
@@ -467,9 +450,6 @@ def _run(cfg, device, local_rank):
                     step=at_step,
                     include_reconstructions=include_val_reconstructions,
                     epoch=at_epoch,
-                    ball_threshold=ball_threshold,
-                    ball_paddle_y_frac=ball_paddle_y_frac,
-                    ball_enabled=ball_enabled,
                 )
             if is_main_process() and run is not None:
                 run.log(prepare_metrics_for_log(val_metrics), step=at_step)
@@ -506,9 +486,6 @@ def _run(cfg, device, local_rank):
                 disc_optimizer=disc_optimizer,
                 disc_cfg=disc_cfg,
                 perceptual_weight=perceptual_weight,
-                ball_threshold=ball_threshold,
-                ball_paddle_y_frac=ball_paddle_y_frac,
-                ball_enabled=ball_enabled,
             )
 
             if val_every_steps == 0:
@@ -538,9 +515,6 @@ def _run(cfg, device, local_rank):
                 step=step,
                 include_reconstructions=True,
                 fid=fid,
-                ball_threshold=ball_threshold,
-                ball_paddle_y_frac=ball_paddle_y_frac,
-                ball_enabled=ball_enabled,
             )
         if is_main_process() and run is not None:
             run.log(prepare_metrics_for_log(test_metrics), step=step)

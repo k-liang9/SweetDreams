@@ -6,7 +6,7 @@ exp:
 
 data:
   h5_path: data/breakout.h5
-  seq_len: 2
+  seq_len: 1
   train_frac: 0.9
   val_frac: 0.05
 
@@ -34,9 +34,6 @@ loss:
   disc_weight: 0.1
   disc_adaptive: false
   r1_weight: 10.0
-  ball_weight: 1.0
-  ball_threshold: 0.05
-  ball_paddle_y_frac: 0.85
 
 discriminator:
   enabled: true
