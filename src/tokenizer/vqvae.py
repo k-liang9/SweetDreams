@@ -194,6 +194,7 @@ class VQVAE(nn.Module):
         self.decoder =      Decoder(cfg)
         self.commitment_cost = cfg.model.codebook.commitment_cost
         self.perceptual_weight = float(cfg.loss.perceptual_weight)
+        self.ball_weight = float(cfg.loss.get('ball_weight', 0.0))
         if self.perceptual_weight > 0:
             self.perceptual = PerceptualLoss(net=cfg.loss.perceptual_net)
         else:
@@ -207,14 +208,17 @@ class VQVAE(nn.Module):
             raise ValueError(f'Expected frames with shape (B, C, H, W) or (B, T, C, H, W), got {tuple(frames.shape)}')
         return frames
         
-    def forward(self, frames):
+    def forward(self, frames, ball_mask=None):
         frames = self.flatten_frames(frames)
+        if ball_mask is not None:
+            ball_mask = self.flatten_frames(ball_mask)
         z = F.normalize(self.encoder(frames), p=2, dim=1)
         z_q, indices, z_q_raw = self.quantizer(z)
         pred = self.decoder(z_q)
         loss_dict = vqvae_loss(
             pred, frames, z, z_q_raw, self.commitment_cost,
             perceptual=self.perceptual, perceptual_weight=self.perceptual_weight,
+            ball_mask=ball_mask, ball_weight=self.ball_weight,
         )
         return {
             'pred': pred,

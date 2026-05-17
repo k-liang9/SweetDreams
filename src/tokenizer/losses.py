@@ -27,11 +27,28 @@ class PerceptualLoss(nn.Module):
 
 def reconstruction_loss(pred, target):
     return F.l1_loss(pred, target)
-    # TODO: ball-specific isolation
-    weight = 1.0 + 10.0 * (target > 0.5).float() # emphasize bright spots (target: pong ball)
-    weight = weight / weight.mean()
-    recon_loss = (weight * (pred - target).pow(2)).mean()
-    return recon_loss
+
+
+def compute_ball_mask(frames_seq, threshold=0.05, paddle_y_frac=0.85):
+    """Frame-differencing ball region mask.
+
+    frames_seq: (B, T, C, H, W) sequence in temporal order.
+    Returns: (B, T, 1, H, W) binary mask aligned with frames_seq.
+    The first frame in each sequence gets a zero mask (no prior frame).
+    """
+    diff = (frames_seq[:, 1:] - frames_seq[:, :-1]).abs().sum(dim=2, keepdim=True)
+    B, _, _, H, W = frames_seq.shape
+    zero = torch.zeros(B, 1, 1, H, W, device=frames_seq.device, dtype=frames_seq.dtype)
+    diff = torch.cat([zero, diff], dim=1)
+    mask = (diff > threshold).float()
+    paddle_y = int(paddle_y_frac * H)
+    mask[..., paddle_y:, :] = 0
+    return mask
+
+
+def ball_aux_loss(pred, target, ball_mask):
+    """L1 reconstruction averaged over masked (ball-region) pixels only."""
+    return ((pred - target).abs() * ball_mask).sum() / ball_mask.sum().clamp_min(1)
 
 def vector_quantization_loss(z, z_q, commitment_cost):
     codebook_loss = F.mse_loss(z_q, z.detach())
@@ -44,7 +61,11 @@ def vector_quantization_loss(z, z_q, commitment_cost):
     }
 
 
-def vqvae_loss(pred, target, z, z_q, commitment_cost, perceptual=None, perceptual_weight=0.0):
+def vqvae_loss(
+    pred, target, z, z_q, commitment_cost,
+    perceptual=None, perceptual_weight=0.0,
+    ball_mask=None, ball_weight=0.0,
+):
     recon_loss = reconstruction_loss(pred, target)
     loss_dict = vector_quantization_loss(z, z_q, commitment_cost)
     total = recon_loss + loss_dict['vq_loss']
@@ -55,10 +76,17 @@ def vqvae_loss(pred, target, z, z_q, commitment_cost, perceptual=None, perceptua
     else:
         perceptual_loss = torch.zeros((), device=pred.device)
 
+    if ball_mask is not None and ball_weight > 0:
+        ball_loss = ball_aux_loss(pred, target, ball_mask)
+        total = total + ball_weight * ball_loss
+    else:
+        ball_loss = torch.zeros((), device=pred.device)
+
     return {
         'loss': total,
         'recon_loss': recon_loss,
         'perceptual_loss': perceptual_loss,
+        'ball_loss': ball_loss,
         **loss_dict,
     }
 

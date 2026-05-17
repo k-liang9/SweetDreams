@@ -26,6 +26,5 @@ conda activate sweetdreams
 torchrun \
     --nproc_per_node=2 \
     train/train_vqvae.py \
-    exp.run_name="disc_weight_0.1" \
-    train.epochs=8 \
-    loss.disc_weight="0.1"
+    exp.run_name="vqvae + ball loss" \
+    discriminator.enabled=false
