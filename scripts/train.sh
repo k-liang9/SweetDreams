@@ -1,10 +1,10 @@
 #!/bin/bash
-#SBATCH --time=0-3:00
+#SBATCH --time=0-2:00
 #SBATCH --gres=gpu:2
 #SBATCH --cpus-per-task=12
 #SBATCH --mem=128G
 #SBATCH --exclude=watgpu108,watgpu408,watgpu1008
-#SBATCH --error=train.log
+#SBATCH --error=train-%j.log
 #SBATCH --mail-user=k24liang@uwaterloo.ca
 #SBATCH --mail-type=END,FAIL
 
@@ -17,7 +17,7 @@ set -euo pipefail
 eval "$(conda shell.bash hook)"
 conda activate sweetdreams
 
-RUN_SHA=44d60c41f874abffc1800a7a9715e8d3315d5eda
+RUN_SHA=bf3d672ea3b4087e5a160df46e91c4a29350393d
 REPO_ROOT=$(git rev-parse --show-toplevel)
 WORKTREE=$REPO_ROOT/../SweetDreams-runs/$SLURM_JOB_ID
 if [ ! -d "$WORKTREE" ]; then
@@ -25,8 +25,12 @@ if [ ! -d "$WORKTREE" ]; then
 fi
 cd "$WORKTREE"
 
+MASTER_PORT=$((10000 + SLURM_JOB_ID % 50000))
+
 torchrun \
+    --master_port="$MASTER_PORT" \
     --nproc_per_node=2 \
     train/train_vqvae.py \
-    exp.run_name="vqvae + ball loss" \
+    exp.run_name="unnormalized codebook" \
+    data.seq_len=1 \
     data.h5_path="$REPO_ROOT/data/breakout.h5"
