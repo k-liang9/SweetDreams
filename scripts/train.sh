@@ -17,7 +17,7 @@ set -euo pipefail
 eval "$(conda shell.bash hook)"
 conda activate sweetdreams
 
-RUN_SHA=bf3d672ea3b4087e5a160df46e91c4a29350393d
+RUN_SHA=1a1015576be82de7afb69c90c167826476d7db5a
 REPO_ROOT=$(git rev-parse --show-toplevel)
 WORKTREE=$REPO_ROOT/../SweetDreams-runs/$SLURM_JOB_ID
 if [ ! -d "$WORKTREE" ]; then
@@ -31,6 +31,5 @@ torchrun \
     --master_port="$MASTER_PORT" \
     --nproc_per_node=2 \
     train/train_vqvae.py \
-    exp.run_name="unnormalized codebook" \
-    data.seq_len=1 \
+    exp.run_name="FINAL: VQGAN 8X8" \
     data.h5_path="$REPO_ROOT/data/breakout.h5"
