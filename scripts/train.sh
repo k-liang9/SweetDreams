@@ -29,5 +29,4 @@ torchrun \
     --nproc_per_node=2 \
     train/train_vqvae.py \
     exp.run_name="vqvae + ball loss" \
-    discriminator.enabled=false \
     data.h5_path="$REPO_ROOT/data/breakout.h5"
