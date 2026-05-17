@@ -48,7 +48,13 @@ from world_model import WorldModel, world_model_loss, world_model_metrics
 
 
 def unwrap(model):
-    return model.module if isinstance(model, DDP) else model
+    while True:
+        if hasattr(model, '_orig_mod'):
+            model = model._orig_mod
+        elif isinstance(model, DDP):
+            model = model.module
+        else:
+            return model
 
 
 def make_loaders(cfg):
@@ -151,8 +157,9 @@ def tokenize_batch(tokenizer, batch, device, cfg):
 
 def model_step(tokenizer, world_model, batch, device, cfg):
     frame_tokens, actions = tokenize_batch(tokenizer, batch, device, cfg)
-    out = world_model(frame_tokens, actions)
-    loss_out = world_model_loss(out, frame_tokens)
+    with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=device.type == 'cuda'):
+        out = world_model(frame_tokens, actions)
+        loss_out = world_model_loss(out, frame_tokens)
     if isinstance(out, dict):
         out = {**out, **loss_out}
     else:
@@ -292,6 +299,8 @@ def _run(cfg, device, local_rank):
             device_ids=[local_rank] if torch.cuda.is_available() else None,
             broadcast_buffers=False,
         )
+    if device.type == 'cuda':
+        world_model = torch.compile(world_model)
 
     optimizer = make_optimizer(world_model, cfg)
     scheduler = build_scheduler(optimizer, cfg.scheduler)

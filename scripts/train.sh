@@ -29,4 +29,5 @@ torchrun \
     --nproc_per_node=2 \
     train/train_world_model.py \
     exp.run_name="world model" \
-    data.h5_path="$REPO_ROOT/data/breakout.h5"
+    data.h5_path="$REPO_ROOT/data/breakout.h5" \
+    tokenizer.checkpoint_path="$REPO_ROOT/weights/vqvae.pt"
