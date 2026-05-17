@@ -4,6 +4,16 @@ import torch.nn as nn
 from torch.nn import functional as F
 from tokenizer.losses import PerceptualLoss, vqvae_loss
 
+def _init_mha_weights(module):
+    if isinstance(module, nn.MultiheadAttention):
+        nn.init.normal_(module.in_proj_weight, mean=0.0, std=0.02)
+        if module.in_proj_bias is not None:
+            nn.init.zeros_(module.in_proj_bias)
+        nn.init.normal_(module.out_proj.weight, mean=0.0, std=0.02)
+        if module.out_proj.bias is not None:
+            nn.init.zeros_(module.out_proj.bias)
+
+
 class SpatialSelfAttention(nn.Module):
     def __init__(self, channels, num_heads=4, dropout=0.0):
         super().__init__()
@@ -14,6 +24,7 @@ class SpatialSelfAttention(nn.Module):
             dropout=dropout,
             batch_first=True,
         )
+        self.apply(_init_mha_weights)
         
     def forward(self, x):
         B, C, H, W = x.shape

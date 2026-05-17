@@ -21,13 +21,11 @@ conda activate sweetdreams
 # with torchrun's NCCL rendezvous on the second sweep (port stuck in TIME_WAIT,
 # rank 1 hits "Connection refused" on the next dist.broadcast). Loop in shell so
 # each value gets its own torchrun invocation with a fresh rendezvous port.
-for disc_weight in 0.0 0.005 0.02 0.01 0.1; do
-    torchrun \
-        --nproc_per_node=2 \
-        --rdzv_backend=c10d \
-        --rdzv_endpoint=localhost:0 \
-        train/train_vqvae.py \
-        exp.run_name="disc_weight_${disc_weight}" \
-        train.epochs=8 \
-        loss.disc_weight="${disc_weight}"
-done
+
+# for disc_weight in 0.0 0.005 0.01 0.1; do
+torchrun \
+    --nproc_per_node=2 \
+    train/train_vqvae.py \
+    exp.run_name="disc_weight_0.1" \
+    train.epochs=8 \
+    loss.disc_weight="0.1"
