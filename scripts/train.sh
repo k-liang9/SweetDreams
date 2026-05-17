@@ -17,14 +17,17 @@ set -euo pipefail
 eval "$(conda shell.bash hook)"
 conda activate sweetdreams
 
-# Hydra multirun (-m) reuses a single Python process across sweeps, which collides
-# with torchrun's NCCL rendezvous on the second sweep (port stuck in TIME_WAIT,
-# rank 1 hits "Connection refused" on the next dist.broadcast). Loop in shell so
-# each value gets its own torchrun invocation with a fresh rendezvous port.
+RUN_SHA=44d60c41f874abffc1800a7a9715e8d3315d5eda
+REPO_ROOT=$(git rev-parse --show-toplevel)
+WORKTREE=$REPO_ROOT/../SweetDreams-runs/$SLURM_JOB_ID
+if [ ! -d "$WORKTREE" ]; then
+    git -C "$REPO_ROOT" worktree add -d "$WORKTREE" "$RUN_SHA"
+fi
+cd "$WORKTREE"
 
-# for disc_weight in 0.0 0.005 0.01 0.1; do
 torchrun \
     --nproc_per_node=2 \
     train/train_vqvae.py \
     exp.run_name="vqvae + ball loss" \
-    discriminator.enabled=false
+    discriminator.enabled=false \
+    data.h5_path="$REPO_ROOT/data/breakout.h5"
