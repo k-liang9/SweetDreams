@@ -45,26 +45,33 @@ class Encoder(nn.Module):
         in_channels = cfg.model.in_out_channels
         hidden_dim = cfg.model.hidden_dim
         latent_dim = cfg.model.latent_dim
+        latent_spatial = cfg.model.latent_spatial
+        if latent_spatial == 8:
+            final_down = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=7, stride=2, padding=0)  # 21 -> 8
+        elif latent_spatial == 6:
+            final_down = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=6, stride=3, padding=0)  # 21 -> 6
+        else:
+            raise ValueError(f"model.latent_spatial must be 6 or 8, got {latent_spatial}")
         self.net = nn.Sequential(
-            nn.Conv2d(in_channels, hidden_dim, kernel_size=4, stride=2, padding=1), # 64 -> 32
-            nn.LayerNorm([hidden_dim, 32, 32]),
+            nn.Conv2d(in_channels, hidden_dim, kernel_size=4, stride=2, padding=1), # 84 -> 42
+            nn.GroupNorm(32, hidden_dim),
             nn.ReLU(),
-            
-            nn.Conv2d(hidden_dim, hidden_dim, kernel_size=4, stride=2, padding=1), # 32 -> 16
-            nn.LayerNorm([hidden_dim, 16, 16]),
-            nn.ReLU(),
-            SpatialSelfAttention(hidden_dim, num_heads=4),
-            
-            nn.Conv2d(hidden_dim, hidden_dim, kernel_size=4, stride=2, padding=1), # 16 -> 8
-            nn.LayerNorm([hidden_dim, 8, 8]),
+
+            nn.Conv2d(hidden_dim, hidden_dim, kernel_size=4, stride=2, padding=1), # 42 -> 21
+            nn.GroupNorm(32, hidden_dim),
             nn.ReLU(),
             SpatialSelfAttention(hidden_dim, num_heads=4),
-            
-            nn.Conv2d(hidden_dim, latent_dim, kernel_size=3, stride=1, padding=0), # 8 -> 6
+
+            final_down,
+            nn.GroupNorm(32, hidden_dim),
+            nn.ReLU(),
+            SpatialSelfAttention(hidden_dim, num_heads=4),
+
+            nn.Conv2d(hidden_dim, latent_dim, kernel_size=3, stride=1, padding=1),
         )
 
     def forward(self, x):
-        return self.net(x) # (B, latent_dim, 6, 6)
+        return self.net(x)
     
 class VectorQuantizer(nn.Module):
     def __init__(self, cfg):
@@ -160,30 +167,29 @@ class Decoder(nn.Module):
         hidden_dim = cfg.model.hidden_dim
         latent_dim = cfg.model.latent_dim
         self.net = nn.Sequential(
-            nn.Upsample(size=(8, 8), mode='nearest'),
-            nn.Conv2d(latent_dim, hidden_dim, kernel_size=3, stride=1, padding=1),  # 6 → 8
-            nn.LayerNorm([hidden_dim, 8, 8]),
+            nn.Conv2d(latent_dim, hidden_dim, kernel_size=3, stride=1, padding=1),
+            nn.GroupNorm(32, hidden_dim),
             nn.SiLU(),
-            nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1),  # 8 → 8
-            nn.LayerNorm([hidden_dim, 8, 8]),
-            nn.SiLU(),
-            SpatialSelfAttention(hidden_dim, num_heads=4),
-            nn.Upsample(scale_factor=2, mode='nearest'),
-            nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1),  # 8 → 16
-            nn.LayerNorm([hidden_dim, 16, 16]),
+            nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1),
+            nn.GroupNorm(32, hidden_dim),
             nn.SiLU(),
             SpatialSelfAttention(hidden_dim, num_heads=4),
-            nn.Upsample(scale_factor=2, mode='nearest'),
-            nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1),  # 16 → 32
-            nn.LayerNorm([hidden_dim, 32, 32]),
+            nn.Upsample(size=(21, 21), mode='nearest'),                              # 6/8 -> 21
+            nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1),
+            nn.GroupNorm(32, hidden_dim),
             nn.SiLU(),
-            nn.Upsample(scale_factor=2, mode='nearest'),
-            nn.Conv2d(hidden_dim, out_channels, kernel_size=3, stride=1, padding=1),  # 32 → 64
+            SpatialSelfAttention(hidden_dim, num_heads=4),
+            nn.Upsample(size=(42, 42), mode='nearest'),                              # 21 -> 42
+            nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1),
+            nn.GroupNorm(32, hidden_dim),
+            nn.SiLU(),
+            nn.Upsample(size=(84, 84), mode='nearest'),                              # 42 -> 84
+            nn.Conv2d(hidden_dim, out_channels, kernel_size=3, stride=1, padding=1),
             nn.Sigmoid()  # output in [0, 1] to match normalized frames
         )
 
     def forward(self, z_q):
-        return self.net(z_q)  # (B, 3, 64, 64)
+        return self.net(z_q)
     
 class VQVAE(nn.Module):
     def __init__(self, cfg):
@@ -231,7 +237,7 @@ class VQVAE(nn.Module):
         _, indices, _ = self.quantizer(z)
         if leading_shape is not None:
             indices = indices.reshape(*leading_shape, *indices.shape[-2:])
-        return indices # (B, 4, 4) or (B, T, 4, 4)
+        return indices
     
     def decode_from_indices(self, indices):
         leading_shape = None

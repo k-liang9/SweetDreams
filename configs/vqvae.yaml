@@ -12,7 +12,7 @@ data:
 
 train:
   seed: 0
-  epochs: 20
+  epochs: 25
   batch_size: 64
   num_workers: 8
   device: auto
@@ -49,6 +49,7 @@ model:
   in_out_channels: 3
   hidden_dim: 256
   latent_dim: 256
+  latent_spatial: 6  # 8 or 6 (84 -> 42 -> 21 -> {8,6})
   codebook:
     num_embeddings: 512
     commitment_cost: 1
