@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --time=0-3:00
+#SBATCH --time=0-5:00
 #SBATCH --gres=gpu:2
 #SBATCH --cpus-per-task=12
 #SBATCH --mem=128G
@@ -14,7 +14,7 @@ set -euo pipefail
 eval "$(conda shell.bash hook)"
 conda activate sweetdreams
 
-RUN_SHA=4601a0bcc7dfcdc429f4c937ae491378867eee91
+RUN_SHA=92586038c5ecfc0f88dd040fa1ce325374fbc166
 REPO_ROOT=$(git rev-parse --show-toplevel)
 WORKTREE=$REPO_ROOT/../SweetDreams-runs/$SLURM_JOB_ID
 if [ ! -d "$WORKTREE" ]; then
@@ -27,8 +27,6 @@ MASTER_PORT=$((10000 + SLURM_JOB_ID % 50000))
 torchrun \
     --master_port="$MASTER_PORT" \
     --nproc_per_node=2 \
-    train/train_vqvae.py \
-    exp.run_name="FINAL: VQGAN 6X6" \
-    model.latent_spatial=6 \
-    discriminator.enabled=true \
+    train/train_world_model.py \
+    exp.run_name="world model" \
     data.h5_path="$REPO_ROOT/data/breakout.h5"
