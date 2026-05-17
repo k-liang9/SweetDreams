@@ -12,7 +12,7 @@ data:
 
 train:
   seed: 0
-  epochs: 20
+  epochs: 25
   batch_size: 64
   num_workers: 8
   device: auto
@@ -30,11 +30,26 @@ scheduler:
 loss:
   perceptual_weight: 0.5
   perceptual_net: vgg
+  disc_warmup_steps: 15000
+  disc_weight: 0.1
+  disc_adaptive: false
+  r1_weight: 10.0
+
+discriminator:
+  enabled: false
+  base_channels: 16
+  num_layers: 3
+  max_channels: 512
+  lr: 0.00014
+  beta1: 0.5
+  beta2: 0.9
+  update_every: 4
 
 model:
   in_out_channels: 3
   hidden_dim: 256
   latent_dim: 256
+  latent_spatial: 8  # 8 or 6 (84 -> 42 -> 21 -> {8,6})
   codebook:
     num_embeddings: 512
     commitment_cost: 1
