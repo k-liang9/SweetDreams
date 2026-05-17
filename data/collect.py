@@ -85,13 +85,13 @@ def run_episode(
 ):
     env.reset(seed=seed)
     noop_steps = int(rng.integers(noop_max + 1)) if noop_max > 0 else 0
-    prefire = fire_on_reset and noop_max > 0 and action_ids["fire"] is not None
-    if prefire:
-        _, _, term, trunc, _ = env.step(action_ids["fire"])
-        if term or trunc:
-            env.reset(seed=seed)
     for _ in range(noop_steps):
         _, _, term, trunc, _ = env.step(action_ids["noop"])
+        if term or trunc:
+            env.reset(seed=seed)
+    prefire = fire_on_reset and action_ids["fire"] is not None
+    if prefire:
+        _, _, term, trunc, _ = env.step(action_ids["fire"])
         if term or trunc:
             env.reset(seed=seed)
 
@@ -144,7 +144,7 @@ def run_episode(
         "return": ep_return,
         "policy": ep_policy,
         "noop_start_steps": noop_steps,
-        "prefire_before_noop_start": prefire,
+        "prefire_after_noop_start": prefire,
         "collector_truncated": collector_truncated,
     }
 
@@ -154,7 +154,7 @@ def write_episode(group, data):
     group.attrs["return"] = data["return"]
     group.attrs["collector_truncated"] = data["collector_truncated"]
     group.attrs["noop_start_steps"] = data["noop_start_steps"]
-    group.attrs["prefire_before_noop_start"] = data["prefire_before_noop_start"]
+    group.attrs["prefire_after_noop_start"] = data["prefire_after_noop_start"]
     group.create_dataset("frames", data=data["frames"])
     group.create_dataset("actions", data=data["actions"])
     group.create_dataset("rewards", data=data["rewards"])
@@ -186,6 +186,13 @@ def _run_worker(args):
                 fire_on_reset=fire_on_reset, noop_max=noop_max,
                 max_steps=max_steps, seed=seed + ep_idx,
             )
+            if data["return"] == 0.0:
+                print(
+                    f"[worker {worker_id}] {i + 1}/{len(assignments)} "
+                    f"ep={ep_idx} policy={ep_policy} DROPPED (return=0, length={len(data['frames'])})",
+                    flush=True,
+                )
+                continue
             write_episode(f.create_group(f"episode_{ep_idx:04d}"), data)
             print(
                 f"[worker {worker_id}] {i + 1}/{len(assignments)} "
@@ -205,7 +212,7 @@ def collect_episodes(
     policy="mixed",
     epsilon=0.05,
     seed=0,
-    frame_size=64,
+    frame_size=84,
     fire_on_reset=True,
     pretrained_device="cpu",
     max_episode_steps=None,
@@ -221,8 +228,8 @@ def collect_episodes(
 
     plan_rng = np.random.default_rng(seed)
     if policy == "mixed":
-        n_random = round(0.01 * n_episodes)
-        n_det = round(0.29 * n_episodes)
+        n_random = 0
+        n_det = round(0.3 * n_episodes)
         n_noisy = n_episodes - n_random - n_det
         episode_policies = (
             ["pretrained_noisy"] * n_noisy
@@ -304,7 +311,7 @@ def parse_args():
     p.add_argument("--epsilon", type=float, default=0.05,
                    help="Random action probability for the 70%% noisy pretrained bucket.")
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--frame-size", type=int, default=64)
+    p.add_argument("--frame-size", type=int, default=84)
     p.add_argument("--max-episode-steps", type=int, default=5000,
                    help="Collector-side cap. Past ~20k frames Breakout's palette cycles and tints the rendered RGB.")
     p.add_argument("--no-fire-on-reset", action="store_true")
