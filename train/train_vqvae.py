@@ -229,6 +229,45 @@ def set_requires_grad(module, requires_grad):
         p.requires_grad_(requires_grad)
 
 
+def gan_active(disc, step, disc_cfg):
+    return disc is not None and step >= disc_cfg['warmup_steps']
+
+
+def gan_generator_step(disc, out, frames, raw_model, disc_cfg, perceptual_weight, split):
+    set_requires_grad(disc, False)
+    fake_logits = disc(out['pred'])
+    g_loss = generator_hinge_loss(fake_logits)
+
+    if disc_cfg['adaptive']:
+        nll = out['recon_loss'] + perceptual_weight * out['perceptual_loss']
+        d_w = adaptive_disc_weight(nll, g_loss, raw_model.decoder.net[-2].weight)
+    else:
+        d_w = torch.tensor(1.0, device=frames.device)
+
+    weight = d_w * disc_cfg['weight']
+    extra_loss = weight * g_loss
+    return extra_loss, generator_metrics(split, g_loss, weight)
+
+
+def gan_discriminator_step(disc, disc_optimizer, out, frames, disc_cfg, split):
+    set_requires_grad(disc, True)
+    use_r1 = disc_cfg['r1_weight'] > 0
+    real = frames.detach().requires_grad_(use_r1)
+    real_logits = disc(real)
+    fake_logits_d = disc(out['pred'].detach())
+    d_loss = discriminator_hinge_loss(real_logits, fake_logits_d)
+
+    r1 = None
+    if use_r1:
+        r1 = r1_gradient_penalty(real_logits, real)
+        d_loss = d_loss + 0.5 * disc_cfg['r1_weight'] * r1
+
+    disc_optimizer.zero_grad()
+    d_loss.backward()
+    disc_optimizer.step()
+    return discriminator_metrics(split, d_loss, real_logits, fake_logits_d, r1_penalty=r1)
+
+
 def run_epoch(
     model,
     loader,
@@ -268,51 +307,23 @@ def run_epoch(
             disc_metrics = {}
 
             if is_train:
-                gan_active = disc is not None and step >= disc_cfg['warmup_steps']
+                active = gan_active(disc, step, disc_cfg)
                 gen_loss = out['loss']
 
-                if gan_active:
-                    assert disc is not None and disc_cfg is not None and disc_optimizer is not None
-                    set_requires_grad(disc, False)
-                    fake_logits = disc(out['pred'])
-                    g_loss = generator_hinge_loss(fake_logits)
-
-                    if disc_cfg['adaptive']:
-                        nll = out['recon_loss'] + perceptual_weight * out['perceptual_loss']
-                        d_w = adaptive_disc_weight(
-                            nll, g_loss, raw_model.decoder.net[-2].weight
-                        )
-                    else:
-                        d_w = torch.tensor(1.0, device=frames.device)
-
-                    weight = d_w * disc_cfg['weight']
-                    gen_loss = out['loss'] + weight * g_loss
-                    disc_metrics.update(generator_metrics(split, g_loss, weight))
+                if active:
+                    extra, gen_metrics = gan_generator_step(
+                        disc, out, frames, raw_model, disc_cfg, perceptual_weight, split
+                    )
+                    gen_loss = gen_loss + extra
+                    disc_metrics.update(gen_metrics)
 
                 optimizer.zero_grad()
                 gen_loss.backward()
                 optimizer.step()
 
-                if gan_active:
-                    assert disc is not None and disc_cfg is not None and disc_optimizer is not None
-                if gan_active and step % disc_cfg['update_every'] == 0:
-                    set_requires_grad(disc, True)
-                    use_r1 = disc_cfg['r1_weight'] > 0
-                    real = frames.detach().requires_grad_(use_r1)
-                    real_logits = disc(real)
-                    fake_logits_d = disc(out['pred'].detach())
-                    d_loss = discriminator_hinge_loss(real_logits, fake_logits_d)
-
-                    r1 = None
-                    if use_r1:
-                        r1 = r1_gradient_penalty(real_logits, real)
-                        d_loss = d_loss + 0.5 * disc_cfg['r1_weight'] * r1
-
-                    disc_optimizer.zero_grad()
-                    d_loss.backward()
-                    disc_optimizer.step()
+                if active and disc_cfg is not None and step % disc_cfg['update_every'] == 0:
                     disc_metrics.update(
-                        discriminator_metrics(split, d_loss, real_logits, fake_logits_d, r1_penalty=r1)
+                        gan_discriminator_step(disc, disc_optimizer, out, frames, disc_cfg, split)
                     )
 
                 step += 1
