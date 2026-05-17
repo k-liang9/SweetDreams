@@ -26,6 +26,13 @@ def frame_token_perplexity(frame_loss):
     return torch.exp(frame_loss.detach())
 
 
+def frame_baseline_accuracy(frame_tokens):
+    """Accuracy of the copy-previous-frame baseline at predicted positions."""
+    if frame_tokens.size(1) < 2:
+        return torch.zeros((), device=frame_tokens.device)
+    return (frame_tokens[:, 1:] == frame_tokens[:, :-1]).float().mean()
+
+
 def world_model_metrics(split, out, frame_tokens, ignore_index=IGNORE_INDEX):
     frame_logits = _frame_logits(out)
     targets, mask = _frame_targets_and_mask(out, frame_tokens, ignore_index)
@@ -49,5 +56,5 @@ def world_model_metrics(split, out, frame_tokens, ignore_index=IGNORE_INDEX):
         f'{split}/frame_loss': frame_loss,
         f'{split}/frame_accuracy': frame_token_accuracy(frame_logits, targets, mask),
         f'{split}/frame_perplexity': frame_token_perplexity(frame_loss),
-        f'{split}/frame_tokens': mask.float().sum(),
+        f'{split}/baseline_accuracy': frame_baseline_accuracy(frame_tokens),
     }
