@@ -11,6 +11,7 @@ for path in (ROOT, SRC):
 
 import hydra
 import torch
+from torch.profiler import profile, record_function, ProfilerActivity, schedule
 import tqdm
 import wandb
 from hydra.utils import to_absolute_path
@@ -145,7 +146,30 @@ def split_batch(frames, actions, seq_len, rollout_steps):
 def rollout(env, prompt_frames, prompt_actions, rollout_actions):
     env.reset(prompt_frames, prompt_actions)
     T = rollout_actions.shape[1]
-    frames = [env.step(rollout_actions[:, t]) for t in tqdm.trange(T, desc='rollout')]
+
+    # one cycle of 1 wait + 9 warmup + 10 active = 20 steps
+    sched = schedule(wait=1, warmup=9, active=10, repeat=1)
+
+    def on_trace_ready(p):
+        print(p.key_averages(group_by_input_shape=True).table(
+            sort_by='self_cuda_time_total', row_limit=25,
+        ))
+        p.export_chrome_trace('rollout_trace.json')
+
+    frames = []
+    with profile(
+        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+        schedule=sched,
+        on_trace_ready=on_trace_ready,
+        record_shapes=True,
+        profile_memory=False,
+        with_stack=False,
+    ) as prof:
+        for t in tqdm.trange(T, desc='rollout'):
+            with record_function('env.step'):
+                frames.append(env.step(rollout_actions[:, t]))
+            prof.step()
+
     return torch.stack(frames, dim=1)  # (B, rollout_steps, N)
 
 
@@ -179,6 +203,7 @@ def main(cfg: DictConfig):
         entity=str(cfg.exp.entity),
         tags=[str(cfg.generate.tag)],
         config=OmegaConf.to_container(cfg, resolve=True),
+        mode='disabled',
     ) as run:
         log_rollout(imagined, future_frames, run, fps=cfg.generate.fps)
 
