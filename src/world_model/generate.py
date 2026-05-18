@@ -1,110 +1,178 @@
-# Rollout / inference for the world model.
-#
-# Mental model
-# ------------
-# The transformer does NOT produce frames; it produces frame-token logits
-# (see world_model.py: frame_head -> num_frame_tokens). The VQ-VAE decoder is
-# what turns tokens back into pixels.
-#
-# It's not "one token per frame" -- it's cfg.model.tokens_per_frame = 16 tokens
-# (from the 4x4 latent grid) per frame, sampled autoregressively within a
-# frame, then an action is appended, then the next 16 tokens, etc.
-#
-# The interleaved sequence layout (from embeddings.py) is:
-#     f0, a0, f1, a1, f2, a2, ..., f_{T-1}
-# where each f_t is N tokens (z_t_0 ... z_t_{N-1}) and a_t is one action token.
-# a_t sits AFTER f_t. Semantically: "observed f_t, took a_t, now predict f_{t+1}".
-# This matches the dataset's (frame_t, action_t) pairing and matches the
-# training target in losses.py: the position holding a_{t-1} predicts the
-# first token of f_t.
-#
-# "Actions from the dataset" is the right call for a deterministic rollout --
-# that's the standard setup so imagined frames can be compared against
-# ground-truth frames at the same actions. (One could also drive it with a
-# policy or random actions; the dataset version is what shows IRIS-style
-# imagination quality.)
-#
-# Sliding window: compute_max_seq_len caps context at
-#     seq_len * tokens_per_frame + (seq_len - 1)
-# Long rollouts must trim the prefix to fit -- see the comment in embeddings.py
-# ("rollout uses a sliding window of the same size").
-#
-#
-# What this file needs to contain
-# -------------------------------
-# A @torch.no_grad() rollout function with these steps:
-#
-# 1. Load weights:
-#    - VQ-VAE checkpoint (same pattern as train_world_model.load_tokenizer).
-#    - Trained world-model checkpoint.
-#    Both .eval(), on `device`.
-#
-# 2. Get a prompt batch:
-#    - Pull (frames, actions, _) from AtariEpisodeDataset.
-#    - Split into a prompt (first k frames) and a future (rollout_steps frames).
-#    - Keep the future frames around as ground truth for side-by-side viewing.
-#
-# 3. Tokenize the prompt:
-#       prompt_tokens = tokenizer.encode(prompt_frames).flatten(2)   # (B, k, N)
-#
-# 4. Autoregressive loop for each of `rollout_steps` new frames t:
-#
-#    Prompt state at the start of step t:
-#      - frame_tokens shape (B, t, N)   -- t known frames so far
-#      - actions      shape (B, t - 1)  -- one fewer action than frames
-#    (For the very first generated frame, t = k, so we have the k prompt frames
-#    and k-1 prompt actions.)
-#
-#    a. Append actions[t - 1] from the dataset (the action that was actually
-#       taken at frame_{t-1}). This is the action that, in the interleaved
-#       sequence, sits between f_{t-1} and f_t.
-#         actions shape becomes (B, t).
-#
-#    b. Allocate a new (B, 1, N) slot for frame t. Then for each token
-#       position n = 0 .. N-1:
-#
-#         - Build the interleaved sequence so far. Cleanest option: feed
-#           frame_tokens=(B, t+1, N) and actions=(B, t) through
-#           world_model.embeddings, then slice the resulting embedded
-#           sequence to end right before the unfilled token. Easier
-#           alternative: skip the embeddings module here and build the
-#           sequence manually by indexing frame_token_embedding and
-#           action_embedding directly, then add positional embeddings.
-#
-#         - Run transformer(x) + frame_head, take the LAST logit only.
-#         - Apply temperature, top_k (from cfg.generate), torch.multinomial
-#           -> sampled token id.
-#         - Fill that position in the new frame.
-#
-#    c. Sliding window: if total interleaved length would exceed
-#       max_seq_len, drop the oldest frame + its trailing action from
-#       frame_tokens / actions before the next iteration.
-#
-# 5. Decode:
-#       all_tokens shape (B, k + rollout_steps, 4, 4)
-#       frames = tokenizer.decode_from_indices(all_tokens)   # (B, T, 3, 64, 64)
-#
-# 6. Log:
-#    - Stack imagined vs. ground-truth side-by-side and log as wandb.Video
-#      (uint8, shape (T, C, H, W*2), fps ~15).
-#    - Optionally also save a local GIF with imageio.
-#
-#
-# Things to watch out for
-# -----------------------
-# - No KV cache yet. transformer.py has "TODO: add kv cache" on lines 42 and 77.
-#   A naive rollout re-runs the full sequence every token; for
-#   rollout_steps=32 * 16 tokens = 512 forward passes per sample it's fine on
-#   a small model, just slow. Don't add KV caching as part of this file;
-#   it's its own task.
-#
-# - Causal mask size. The registered self.mask is sized to max_seq_len. As
-#   long as the window is slid correctly it won't trip the size check in
-#   transformer.SelfAttention.forward.
-#
-# - First action shape contract. embeddings.forward requires actions to be
-#   (B, T - 1), so with t+1 frames in the sequence pass t actions. The action
-#   at index t-1 is the one that conditions generation of frame t.
-#
-# - Determinism for debugging. Add a --greedy / temperature=0 path (argmax)
-#   so the model can be sanity-checked without sampling noise.
+# Rollout / inference for the world model. No KV cache yet (transformer.py
+# TODO), so each generated token re-runs the full forward pass.
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[2]
+SRC = ROOT / 'src'
+for path in (ROOT, SRC):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
+
+import hydra
+import torch
+import wandb
+from hydra.utils import to_absolute_path
+from omegaconf import DictConfig, OmegaConf
+from torch.utils.data import DataLoader
+
+from data import AtariEpisodeDataset
+from train.utils import get_device, load_tokenizer, load_world_model, move_to_device
+
+
+class WorldModelEnv:
+    """Gym-style wrapper holding the sliding (frame_tokens, actions) window for autoregressive rollouts."""
+
+    def __init__(self, world_model, tokenizer, device, cfg):
+        self.tokenizer = tokenizer.to(device)
+        self.world_model = world_model.to(device)
+        self.device = device
+        self.temp = cfg.generate.temperature
+        self.top_k = cfg.generate.top_k
+        self.greedy = cfg.generate.greedy
+        N = cfg.model.tokens_per_frame
+        B = cfg.generate.batch_size
+        max_T = cfg.data.seq_len
+        self.frame_tokens = torch.zeros(B, max_T + 1, N, dtype=torch.long, device=device)
+        self.actions = torch.zeros(B, max_T, dtype=torch.long, device=device)
+
+    @torch.no_grad()
+    def reset(self, prompt_frames, prompt_actions):
+        """
+        prompt_frames:  (B, seq_len, C, H, W)
+        prompt_actions: (B, seq_len - 1)
+
+        Lays out buffers so the last frame slot and last action slot are empty,
+        ready for step() to fill on the next call.
+        """
+        prompt_tokens = self.tokenizer.encode(prompt_frames).flatten(2).contiguous()  # (B, seq_len, N)
+
+        self.frame_tokens.zero_()
+        self.actions.zero_()
+
+        seq_len = self.actions.shape[1]
+        self.frame_tokens[:, :seq_len] = prompt_tokens
+        self.actions[:, :seq_len - 1] = prompt_actions
+
+    @torch.no_grad()
+    def step(self, action):
+        """
+        action: (B,) — the action conditioning the next frame.
+        returns: (B, N) — frame tokens for the newly generated frame.
+        """
+        self.actions[:, -1] = action
+
+        N = self.frame_tokens.shape[2]
+        for n in range(N):
+            self.frame_tokens[:, -1, n] = self._sample_token(n)
+
+        generated = self.frame_tokens[:, -1].clone()
+
+        self.frame_tokens = torch.roll(self.frame_tokens, shifts=-1, dims=1)
+        self.frame_tokens[:, -1] = 0
+        self.actions = torch.roll(self.actions, shifts=-1, dims=1)
+        self.actions[:, -1] = 0
+
+        return generated
+
+    @torch.no_grad()
+    def _sample_token(self, n):
+        """Logit at position seq_len*(N+1) + n - 1 predicts token n of the last frame."""
+        out = self.world_model(self.frame_tokens, self.actions)
+        logits = out['frame_logits']  # (B, S, V)
+        seq_len = self.actions.shape[1]
+        N = self.frame_tokens.shape[2]
+        pos = seq_len * (N + 1) + n - 1
+        logits = logits[:, pos]  # (B, V)
+
+        if self.greedy:
+            return logits.argmax(dim=-1)
+        if self.temp != 1.0:
+            logits = logits / self.temp
+        if self.top_k is not None and self.top_k > 0:
+            v, _ = torch.topk(logits, k=self.top_k, dim=-1)
+            threshold = v[..., -1:]
+            logits = torch.where(logits < threshold, torch.full_like(logits, float('-inf')), logits)
+        probs = torch.softmax(logits, dim=-1)
+        return torch.multinomial(probs, num_samples=1).squeeze(-1)
+
+    @torch.no_grad()
+    def decode(self, frame_tokens):
+        """(B, T, N) frame tokens -> (B, T, C, H, W) pixels."""
+        B, T, N = frame_tokens.shape
+        H = W = int(round(N ** 0.5))
+        if H * W != N:
+            raise ValueError(f'tokens_per_frame={N} is not a perfect square')
+        return self.tokenizer.decode_from_indices(frame_tokens.reshape(B, T, H, W))
+
+
+def load(cfg, device):
+    """Tokenizer, world model, and a dataset whose window covers prompt + rollout."""
+    tokenizer = load_tokenizer(cfg, device)
+    world_model = load_world_model(cfg, device)
+    window = cfg.data.seq_len + cfg.generate.rollout_steps
+    dataset = AtariEpisodeDataset(
+        h5_path=to_absolute_path(cfg.data.h5_path),
+        seq_len=window,
+        return_tokens=False,
+    )
+    return tokenizer, world_model, dataset
+
+
+def split_batch(frames, actions, seq_len, rollout_steps):
+    """
+    frames:  (B, seq_len + rollout_steps, C, H, W)
+    actions: (B, seq_len + rollout_steps)
+
+    Returns prompt frames/actions, the actions driving generation, and the
+    ground-truth future frames for side-by-side comparison.
+    """
+    prompt_frames = frames[:, :seq_len]
+    prompt_actions = actions[:, :seq_len - 1]
+    rollout_actions = actions[:, seq_len - 1 : seq_len - 1 + rollout_steps]
+    future_frames = frames[:, seq_len : seq_len + rollout_steps]
+    return prompt_frames, prompt_actions, rollout_actions, future_frames
+
+
+@torch.no_grad()
+def rollout(env, prompt_frames, prompt_actions, rollout_actions):
+    env.reset(prompt_frames, prompt_actions)
+    frames = [env.step(rollout_actions[:, t]) for t in range(rollout_actions.shape[1])]
+    return torch.stack(frames, dim=1)  # (B, rollout_steps, N)
+
+
+def log_rollout(imagined, future_frames, run, fps):
+    """imagined, future_frames: (B, T, C, H, W) in [0,1]. Logs sample 0 side-by-side as a wandb video."""
+    side_by_side = torch.cat([imagined, future_frames], dim=-1)  # (B, T, C, H, 2W)
+    video = (side_by_side[0].clamp(0, 1) * 255).to(torch.uint8).cpu().numpy()
+    run.log({'rollout': wandb.Video(video, fps=fps)})
+
+
+@hydra.main(version_base=None, config_path='../../configs', config_name='world_model')
+def main(cfg: DictConfig):
+    device = get_device(cfg.train.device)
+    tokenizer, world_model, dataset = load(cfg, device)
+    env = WorldModelEnv(world_model, tokenizer, device, cfg)
+
+    loader = DataLoader(dataset, batch_size=cfg.generate.batch_size, shuffle=True)
+    frames, actions, _ = move_to_device(next(iter(loader)), device)
+
+    prompt_frames, prompt_actions, rollout_actions, future_frames = split_batch(
+        frames, actions, cfg.data.seq_len, cfg.generate.rollout_steps,
+    )
+
+    generated = rollout(env, prompt_frames, prompt_actions, rollout_actions)
+    imagined = env.decode(generated)
+
+    with wandb.init(
+        project=str(cfg.exp.project),
+        name=f'{cfg.exp.run_name}-rollout',
+        group=str(cfg.exp.group),
+        entity=str(cfg.exp.entity),
+        config=OmegaConf.to_container(cfg, resolve=True),
+    ) as run:
+        log_rollout(imagined, future_frames, run, fps=cfg.generate.fps)
+
+
+if __name__ == '__main__':
+    main()

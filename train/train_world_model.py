@@ -35,6 +35,7 @@ from train.utils import (
     init_distributed,
     is_distributed,
     is_main_process,
+    load_tokenizer,
     move_to_device,
     prepare_metrics_for_log,
     save_checkpoint,
@@ -43,7 +44,6 @@ from train.utils import (
 
 STOP_FILE = ROOT / 'STOP'
 from data import AtariEpisodeDataset
-from tokenizer import VQVAE
 from world_model import WorldModel, world_model_loss, world_model_metrics
 
 
@@ -106,26 +106,6 @@ def make_loaders(cfg):
     val_loader = DataLoader(val_set, shuffle=False, sampler=val_sampler, **loader_kwargs)
     test_loader = DataLoader(test_set, shuffle=False, sampler=test_sampler, **loader_kwargs)
     return train_loader, val_loader, test_loader
-
-
-def load_tokenizer(cfg, device):
-    checkpoint_path = Path(to_absolute_path(cfg.tokenizer.checkpoint_path))
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
-
-    tokenizer_cfg = OmegaConf.create(checkpoint['cfg'])
-    tokenizer = VQVAE(tokenizer_cfg)
-    tokenizer.load_state_dict(checkpoint['model_state_dict'])
-    tokenizer.eval()
-    for param in tokenizer.parameters():
-        param.requires_grad_(False)
-
-    if tokenizer.quantizer.K != cfg.model.num_frame_tokens:
-        raise ValueError(
-            f'World model expects {cfg.model.num_frame_tokens} frame-token classes, '
-            f'but VQ-VAE checkpoint has {tokenizer.quantizer.K}'
-        )
-
-    return tokenizer.to(device)
 
 
 def unpack_batch(batch):

@@ -5,8 +5,13 @@ import random
 
 import torch
 import torch.distributed as dist
+from hydra.utils import to_absolute_path
+from omegaconf import OmegaConf
 from torch.optim.lr_scheduler import CosineAnnealingLR, StepLR
 import wandb
+
+from tokenizer import VQVAE
+from world_model import WorldModel
 
 
 def _maybe_disable_nccl_p2p(local_rank):
@@ -153,6 +158,35 @@ def save_checkpoint(state, path, save_to_wandb=True):
     torch.save(state, path)
     if save_to_wandb:
         wandb.save(str(path))
+
+
+def load_world_model(cfg, device):
+    ckpt = torch.load(to_absolute_path(cfg.generate.checkpoint_path), map_location='cpu')
+    world_model = WorldModel(cfg)
+    world_model.load_state_dict(ckpt['model_state_dict'])
+    world_model.eval().to(device)
+    for p in world_model.parameters():
+        p.requires_grad_(False)
+    return world_model
+
+
+def load_tokenizer(cfg, device):
+    checkpoint = torch.load(to_absolute_path(cfg.tokenizer.checkpoint_path), map_location='cpu')
+
+    tokenizer_cfg = OmegaConf.create(checkpoint['cfg'])
+    tokenizer = VQVAE(tokenizer_cfg)
+    tokenizer.load_state_dict(checkpoint['model_state_dict'])
+    tokenizer.eval()
+    for param in tokenizer.parameters():
+        param.requires_grad_(False)
+
+    if tokenizer.quantizer.K != cfg.model.num_frame_tokens:
+        raise ValueError(
+            f'World model expects {cfg.model.num_frame_tokens} frame-token classes, '
+            f'but VQ-VAE checkpoint has {tokenizer.quantizer.K}'
+        )
+
+    return tokenizer.to(device)
 
 
 def build_scheduler(optimizer, scheduler_cfg):

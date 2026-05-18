@@ -14,7 +14,7 @@ set -euo pipefail
 eval "$(conda shell.bash hook)"
 conda activate sweetdreams
 
-RUN_SHA=7158a7c9dad5fb115d5ed6577d7ffc49ccf2c941
+RUN_SHA=d3b1d1f007e73ac8b1b5c7dcd8f4a9da8e1a6021
 REPO_ROOT=$(git rev-parse --show-toplevel)
 WORKTREE=$REPO_ROOT/../SweetDreams-runs/$SLURM_JOB_ID
 if [ ! -d "$WORKTREE" ]; then
