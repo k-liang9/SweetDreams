@@ -21,10 +21,12 @@ train:
   device: auto
   grad_clip_norm: 1.0
   val_every_steps: 400
+  log_every_steps: 20
+  tokenize_batch_size: 64
 
 optimizer:
   type: adamw
-  lr: 0.00042
+  lr: 0.0014
   weight_decay: 0.01
 
 scheduler:
@@ -45,3 +47,7 @@ generate:
   top_k: 50
   rollout_steps: 32
   greedy: false
+  batch_size: 32
+  num_samples: 32
+  checkpoint_path: weights/world_model.pt
+  fps: 15

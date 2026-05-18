@@ -2,16 +2,16 @@ from pathlib import Path
 import sys
 import os
 
-os.environ.setdefault('NCCL_P2P_DISABLE', '1')
-
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / 'src'
 for path in (ROOT, SRC):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
+import h5py
 import hydra
 import torch
+import torch.distributed as dist
 from hydra.utils import to_absolute_path
 from omegaconf import DictConfig, OmegaConf
 from torch import optim
@@ -61,6 +61,7 @@ def make_loaders(cfg):
     dataset = AtariEpisodeDataset(
         h5_path=to_absolute_path(cfg.data.h5_path),
         seq_len=cfg.data.seq_len + 1,  # cfg.data.seq_len = context frames; dataset slices context + 1 target frame
+        return_tokens=True,
     )
 
     n_train = int(len(dataset) * cfg.data.train_frac)
@@ -128,14 +129,14 @@ def load_tokenizer(cfg, device):
 
 
 def unpack_batch(batch):
-    frames, actions, *_ = batch
-    return frames, actions
+    tokens, actions, *_ = batch
+    return tokens, actions
 
 
-@torch.no_grad()
-def tokenize_batch(tokenizer, batch, device, cfg):
-    frames, actions = unpack_batch(move_to_device(batch, device))
-    frame_tokens = tokenizer.encode(frames).flatten(2).contiguous()
+def prepare_batch(batch, device, cfg):
+    frame_tokens, actions = unpack_batch(move_to_device(batch, device))
+    # tokens come from h5 as (B, T, H, W); flatten the spatial dims into per-frame tokens.
+    frame_tokens = frame_tokens.flatten(2).contiguous()
 
     if frame_tokens.size(1) < 2:
         raise ValueError('World-model training needs data.seq_len >= 1 (window must contain context + target frame)')
@@ -149,14 +150,14 @@ def tokenize_batch(tokenizer, batch, device, cfg):
     if tokens_per_frame != cfg.model.tokens_per_frame:
         raise ValueError(
             f'World-model config expects {cfg.model.tokens_per_frame} tokens per frame, '
-            f'but tokenizer produced {tokens_per_frame}. Update model.tokens_per_frame.'
+            f'but precomputed cache has {tokens_per_frame}. Update model.tokens_per_frame.'
         )
 
     return frame_tokens, actions[:, :-1].contiguous()
 
 
-def model_step(tokenizer, world_model, batch, device, cfg):
-    frame_tokens, actions = tokenize_batch(tokenizer, batch, device, cfg)
+def model_step(world_model, batch, device, cfg):
+    frame_tokens, actions = prepare_batch(batch, device, cfg)
     with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=device.type == 'cuda'):
         out = world_model(frame_tokens, actions)
         loss_out = world_model_loss(out, frame_tokens)
@@ -165,6 +166,46 @@ def model_step(tokenizer, world_model, batch, device, cfg):
     else:
         out = {'frame_logits': out, **loss_out}
     return out, frame_tokens
+
+
+@torch.no_grad()
+def precompute_tokens(tokenizer, h5_path, device, cfg):
+    # Tokenize every frame in the h5 once and write per-episode `tokens` datasets.
+    # Overwrites any existing tokens so reruns pick up tokenizer changes.
+    tokenizer.eval()
+    batch_size = int(cfg.train.get('tokenize_batch_size', 512))
+    with h5py.File(h5_path, 'r+') as f:
+        ep_keys = list(f.keys())
+        for ep_key in tqdm.tqdm(ep_keys, desc='precompute tokens', disable=not is_main_process()):
+            ep = f[ep_key]
+            n = ep['frames'].shape[0]
+
+            # Probe one frame to learn token shape.
+            probe = torch.from_numpy(ep['frames'][:1]).to(device=device, dtype=torch.float32).div_(255.0)
+            probe = probe.permute(0, 3, 1, 2).contiguous()
+            with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=device.type == 'cuda'):
+                probe_tokens = tokenizer.encode(probe)
+            H, W = probe_tokens.shape[-2:]
+
+            if 'tokens' in ep:
+                del ep['tokens']
+            tokens_ds = ep.create_dataset('tokens', shape=(n, H, W), dtype='int32')
+
+            for start in range(0, n, batch_size):
+                end = min(start + batch_size, n)
+                frames = torch.from_numpy(ep['frames'][start:end]).to(device=device, dtype=torch.float32).div_(255.0)
+                frames = frames.permute(0, 3, 1, 2).contiguous()
+                with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=device.type == 'cuda'):
+                    indices = tokenizer.encode(frames)
+                tokens_ds[start:end] = indices.to(torch.int32).cpu().numpy()
+
+    if is_main_process():
+        print(f'precomputed tokens: tokens_per_frame={H * W} ({H}x{W}), num_frame_tokens={cfg.model.num_frame_tokens}')
+    if H * W != cfg.model.tokens_per_frame:
+        raise ValueError(
+            f'World-model config expects {cfg.model.tokens_per_frame} tokens per frame, '
+            f'but tokenizer produced {H * W}. Update model.tokens_per_frame.'
+        )
 
 
 def make_optimizer(model, cfg):
@@ -198,7 +239,6 @@ def all_reduce_metrics(metrics):
 
 
 def run_epoch(
-    tokenizer,
     world_model,
     loader,
     split,
@@ -212,7 +252,6 @@ def run_epoch(
 ):
     is_train = optimizer is not None
     world_model.train(is_train)
-    tokenizer.eval()
     metrics_list = []
     desc = f'[epoch {epoch}] {split} batches' if epoch is not None else f'{split} batches'
     progress = tqdm.tqdm(
@@ -222,11 +261,12 @@ def run_epoch(
         disable=not is_main_process(),
     )
     grad_clip_norm = cfg.train.get('grad_clip_norm')
+    log_every_steps = int(cfg.train.get('log_every_steps', 20)) if is_train else 0
     raw_world_model = unwrap(world_model)
 
     for batch in progress:
         with torch.set_grad_enabled(is_train):
-            out, frame_tokens = model_step(tokenizer, world_model, batch, device, cfg)
+            out, frame_tokens = model_step(world_model, batch, device, cfg)
             loss = out['loss']
 
             if is_train:
@@ -237,17 +277,20 @@ def run_epoch(
                 optimizer.step()
                 step += 1
 
-        metrics = world_model_metrics(split, out, frame_tokens)
-        progress.set_postfix(loss=f'{float(loss.detach().cpu()):.4f}')
-
         if is_train:
-            if run is not None and is_main_process():
-                metrics[f'{split}/lr'] = optimizer.param_groups[0]['lr']
-                run.log(prepare_metrics_for_log(metrics), step=step)
+            # Only sync the loss back / compute metrics / log on logging steps.
+            # Every-step .cpu() and wandb.log serialize the GPU on a tiny model.
+            if log_every_steps > 0 and step % log_every_steps == 0:
+                metrics = world_model_metrics(split, out, frame_tokens)
+                progress.set_postfix(loss=f'{float(loss.detach()):.4f}')
+                if run is not None and is_main_process():
+                    metrics[f'{split}/lr'] = optimizer.param_groups[0]['lr']
+                    run.log(prepare_metrics_for_log(metrics), step=step)
             if step_callback is not None:
                 step_callback(step)
                 world_model.train(True)
         else:
+            metrics = world_model_metrics(split, out, frame_tokens)
             metrics_list.append(metrics)
 
     if not is_train:
@@ -255,20 +298,6 @@ def run_epoch(
         metrics = all_reduce_metrics(metrics)
         return metrics, step
     return {}, step
-
-
-@torch.no_grad()
-def validate_tokenizer_shape(tokenizer, loader, device, cfg):
-    if len(loader) == 0:
-        return
-
-    batch = next(iter(loader))
-    frame_tokens, _ = tokenize_batch(tokenizer, batch, device, cfg)
-    if is_main_process():
-        print(
-            f'World-model tokenization: {frame_tokens.size(1)} frames, '
-            f'{frame_tokens.size(-1)} tokens/frame, {cfg.model.num_frame_tokens} token classes'
-        )
 
 
 @hydra.main(version_base=None, config_path='../configs', config_name='world_model')
@@ -288,19 +317,29 @@ def main(cfg: DictConfig):
 
 
 def _run(cfg, device, local_rank):
-    train_loader, val_loader, test_loader = make_loaders(cfg)
     tokenizer = load_tokenizer(cfg, device)
-    validate_tokenizer_shape(tokenizer, train_loader, device, cfg)
+
+    # Tokenize the whole dataset once (rank 0 writes; others wait), then the
+    # training loop reads precomputed tokens straight from the h5.
+    h5_path = to_absolute_path(cfg.data.h5_path)
+    if is_main_process():
+        precompute_tokens(tokenizer, h5_path, device, cfg)
+    if is_distributed():
+        dist.barrier()
+
+    train_loader, val_loader, test_loader = make_loaders(cfg)
 
     world_model = WorldModel(cfg).to(device)
+    # Compile the bare module before wrapping in DDP so DDP's gradient hooks see
+    # the real parameters and the compile graph isn't broken by DDP's Python wrappers.
+    if device.type == 'cuda':
+        world_model = torch.compile(world_model)
     if is_distributed():
         world_model = DDP(
             world_model,
             device_ids=[local_rank] if torch.cuda.is_available() else None,
             broadcast_buffers=False,
         )
-    if device.type == 'cuda':
-        world_model = torch.compile(world_model)
 
     optimizer = make_optimizer(world_model, cfg)
     scheduler = build_scheduler(optimizer, cfg.scheduler)
@@ -326,7 +365,6 @@ def _run(cfg, device, local_rank):
             nonlocal best_model_state
             with torch.no_grad():
                 val_metrics, _ = run_epoch(
-                    tokenizer,
                     world_model,
                     val_loader,
                     'val',
@@ -362,7 +400,6 @@ def _run(cfg, device, local_rank):
                     validate(_epoch, s)
 
             _, step = run_epoch(
-                tokenizer,
                 world_model,
                 train_loader,
                 'train',
@@ -395,7 +432,6 @@ def _run(cfg, device, local_rank):
         if len(test_loader) > 0:
             with torch.no_grad():
                 test_metrics, step = run_epoch(
-                    tokenizer,
                     world_model,
                     test_loader,
                     'test',

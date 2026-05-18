@@ -9,12 +9,26 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, StepLR
 import wandb
 
 
+def _maybe_disable_nccl_p2p(local_rank):
+    # NCCL reads env vars at init_process_group time; must be set before that call.
+    # Skip if the user has already pinned a value via the environment.
+    if 'NCCL_P2P_DISABLE' in os.environ:
+        return
+    if not torch.cuda.is_available():
+        return
+    # L40S has no NVLink; NCCL P2P over PCIe hangs collectives on this cluster.
+    name = torch.cuda.get_device_name(local_rank)
+    if 'L40' in name:
+        os.environ['NCCL_P2P_DISABLE'] = '1'
+
+
 def init_distributed():
     if 'LOCAL_RANK' not in os.environ:
         return 0, 1
     local_rank = int(os.environ['LOCAL_RANK'])
     if torch.cuda.is_available():
         torch.cuda.set_device(local_rank)
+        _maybe_disable_nccl_p2p(local_rank)
     dist.init_process_group(backend='nccl' if torch.cuda.is_available() else 'gloo')
     return local_rank, dist.get_world_size()
 

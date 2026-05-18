@@ -17,6 +17,7 @@ train:
   num_workers: 8
   device: auto
   val_every_steps: 400
+  log_every_steps: 20
 
 optimizer:
   type: adam

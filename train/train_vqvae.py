@@ -2,9 +2,6 @@ import os
 from pathlib import Path
 import sys
 
-# L40S has no NVLink; NCCL P2P over PCIe hangs on this cluster for collective ops
-os.environ.setdefault('NCCL_P2P_DISABLE', '1')
-
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / 'src'
 for path in (ROOT, SRC):
@@ -284,6 +281,7 @@ def run_epoch(
     disc_optimizer=None,
     disc_cfg=None,
     perceptual_weight=0.0,
+    log_every_steps_override=20,
 ):
     is_train = optimizer is not None
     model.train(is_train)
@@ -293,6 +291,7 @@ def run_epoch(
     desc = f'[epoch {epoch}] {split} batches' if epoch is not None else f'{split} batches'
     raw_model = unwrap(model)
     raw_disc = unwrap(disc) if disc is not None else None
+    log_every_steps = log_every_steps_override if is_train else 0
 
     recon_batch_idx = None
     if include_reconstructions and is_main_process() and len(loader) > 0:
@@ -329,11 +328,12 @@ def run_epoch(
                 step += 1
 
         if is_train:
-            metrics = vqvae_metrics(split, out, frames, num_embeddings=raw_model.quantizer.K)
-            metrics[f'{split}/lr'] = optimizer.param_groups[0]['lr']
-            metrics.update(disc_metrics)
-            if run is not None and is_main_process():
-                run.log(prepare_metrics_for_log(metrics), step=step)
+            if log_every_steps > 0 and step % log_every_steps == 0:
+                metrics = vqvae_metrics(split, out, frames, num_embeddings=raw_model.quantizer.K)
+                metrics[f'{split}/lr'] = optimizer.param_groups[0]['lr']
+                metrics.update(disc_metrics)
+                if run is not None and is_main_process():
+                    run.log(prepare_metrics_for_log(metrics), step=step)
             if step_callback is not None:
                 step_callback(step)
                 model.train(True)
@@ -497,6 +497,7 @@ def _run(cfg, device, local_rank):
                 disc_optimizer=disc_optimizer,
                 disc_cfg=disc_cfg,
                 perceptual_weight=perceptual_weight,
+                log_every_steps_override=int(cfg.train.get('log_every_steps', 20)),
             )
 
             if val_every_steps == 0:
