@@ -32,4 +32,4 @@ torchrun \
     train/train_world_model.py \
     exp.run_name="world model" \
     data.h5_path="$REPO_ROOT/data/breakout.h5" \
-    tokenizer.checkpoint_path="$REPO_ROOT/weights/tokenizer.pt"
+    checkpoints.tokenizer="$REPO_ROOT/weights/tokenizer.pt"

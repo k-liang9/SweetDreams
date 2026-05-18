@@ -152,7 +152,7 @@ def save_checkpoint(state, path, save_to_wandb=True):
 
 
 def load_world_model(cfg, device):
-    ckpt = torch.load(to_absolute_path(cfg.generate.checkpoint_path), map_location='cpu')
+    ckpt = torch.load(to_absolute_path(cfg.checkpoints.world_model), map_location='cpu')
     world_model = WorldModel(cfg)
     world_model.load_state_dict(ckpt['model_state_dict'])
     world_model.eval().to(device)
@@ -162,7 +162,7 @@ def load_world_model(cfg, device):
 
 
 def load_tokenizer(cfg, device):
-    checkpoint = torch.load(to_absolute_path(cfg.tokenizer.checkpoint_path), map_location='cpu')
+    checkpoint = torch.load(to_absolute_path(cfg.checkpoints.tokenizer), map_location='cpu')
 
     tokenizer_cfg = OmegaConf.create(checkpoint['cfg'])
     tokenizer = VQVAE(tokenizer_cfg)

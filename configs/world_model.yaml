@@ -10,8 +10,9 @@ data:
   train_frac: 0.9
   val_frac: 0.05
 
-tokenizer:
-  checkpoint_path: weights/tokenizer.pt
+checkpoints:
+  tokenizer: weights/tokenizer.pt
+  world_model: weights/world_model.pt
 
 train:
   seed: 0
@@ -26,7 +27,7 @@ train:
 
 optimizer:
   type: adamw
-  lr: 0.0014
+  lr: 0.00042
   weight_decay: 0.01
 
 scheduler:
@@ -49,5 +50,4 @@ generate:
   greedy: false
   batch_size: 32
   num_samples: 32
-  checkpoint_path: weights/world_model.pt
   fps: 15
