@@ -3,6 +3,7 @@ exp:
   project: sweetdreams
   group: vqvae
   run_name: vqvae
+  tag: tokenizer
 
 data:
   h5_path: data/breakout.h5

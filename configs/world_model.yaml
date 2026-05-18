@@ -3,6 +3,7 @@ exp:
   project: sweetdreams
   group: world_model
   run_name: world_model
+  tag: world_model
 
 data:
   h5_path: data/breakout.h5
@@ -44,6 +45,7 @@ model:
   attention: causal
 
 generate:
+  tag: rollout
   temperature: 1.0
   top_k: 50
   rollout_steps: 32

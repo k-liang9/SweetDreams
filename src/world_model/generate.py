@@ -142,14 +142,14 @@ def rollout(env, prompt_frames, prompt_actions, rollout_actions):
 
 
 def log_rollout(imagined, future_frames, run, fps):
-    """imagined, future_frames: (B, T, C, H, W) in [0,1]. Logs sample 0 side-by-side as a wandb video."""
+    """imagined, future_frames: (B, T, C, H, W) in [0,1]. Logs each sample side-by-side as a wandb video."""
     side_by_side = torch.cat([imagined, future_frames], dim=-1)  # (B, T, C, H, 2W)
-    video = (side_by_side[0].clamp(0, 1) * 255).to(torch.uint8).cpu().numpy()
-    run.log({'rollout': wandb.Video(video, fps=fps)})
+    videos = (side_by_side.clamp(0, 1) * 255).to(torch.uint8).cpu().numpy()
+    run.log({'rollout': [wandb.Video(v, fps=fps) for v in videos]})
 
 
 @hydra.main(version_base=None, config_path='../../configs', config_name='world_model')
-def main(cfg: DictConfig):
+def main(cfg: DictConfig): 
     device = get_device(cfg.train.device)
     tokenizer, world_model, dataset = load(cfg, device)
     env = WorldModelEnv(world_model, tokenizer, device, cfg)
@@ -169,6 +169,7 @@ def main(cfg: DictConfig):
         name=f'{cfg.exp.run_name}-rollout',
         group=str(cfg.exp.group),
         entity=str(cfg.exp.entity),
+        tags=[str(cfg.exp.tag), str(cfg.generate.tag)],
         config=OmegaConf.to_container(cfg, resolve=True),
     ) as run:
         log_rollout(imagined, future_frames, run, fps=cfg.generate.fps)

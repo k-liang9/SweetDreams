@@ -330,6 +330,7 @@ def _run(cfg, device, local_rank):
             name=str(cfg.exp.run_name),
             group=str(cfg.exp.group),
             entity=str(cfg.exp.entity),
+            tags=[str(cfg.exp.tag)],
             config=wandb_config,
         )
 
