@@ -60,7 +60,7 @@ def unwrap(model):
 def make_loaders(cfg):
     dataset = AtariEpisodeDataset(
         h5_path=to_absolute_path(cfg.data.h5_path),
-        seq_len=cfg.data.seq_len,
+        seq_len=cfg.data.seq_len + 1,  # cfg.data.seq_len = context frames; dataset slices context + 1 target frame
     )
 
     n_train = int(len(dataset) * cfg.data.train_frac)
@@ -138,7 +138,7 @@ def tokenize_batch(tokenizer, batch, device, cfg):
     frame_tokens = tokenizer.encode(frames).flatten(2).contiguous()
 
     if frame_tokens.size(1) < 2:
-        raise ValueError('World-model training needs data.seq_len >= 2')
+        raise ValueError('World-model training needs data.seq_len >= 1 (window must contain context + target frame)')
     if actions.shape[:2] != frame_tokens.shape[:2]:
         raise ValueError(
             f'Actions must have shape (B, T) matching frame tokens; '

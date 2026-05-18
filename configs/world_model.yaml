@@ -11,7 +11,7 @@ data:
   val_frac: 0.05
 
 tokenizer:
-  checkpoint_path: weights/vqvae.pt
+  checkpoint_path: weights/tokenizer.pt
 
 train:
   seed: 0
@@ -24,7 +24,7 @@ train:
 
 optimizer:
   type: adamw
-  lr: 0.0003
+  lr: 0.00042
   weight_decay: 0.01
 
 scheduler:
@@ -44,3 +44,4 @@ generate:
   temperature: 1.0
   top_k: 50
   rollout_steps: 32
+  greedy: false

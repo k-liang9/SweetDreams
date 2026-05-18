@@ -7,9 +7,9 @@ class AtariEpisodeDataset(Dataset):
         self.h5_path = h5_path
         self.file = None
         self.seq_len = seq_len
-        
+
         # build index of all valid (episode, start_frame) pairs
-        
+
         self.index = []
         with h5py.File(self.h5_path, "r") as file:
             for ep_key in file.keys():

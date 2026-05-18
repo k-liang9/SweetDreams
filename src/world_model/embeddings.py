@@ -3,9 +3,14 @@ import torch.nn as nn
 
 
 def compute_max_seq_len(cfg):
-    """Interleaved length of one training sequence; rollout uses a sliding window of the same size."""
+    """Interleaved length of one training sequence; rollout uses a sliding window of the same size.
+
+    cfg.data.seq_len is the number of past frames in context. The window holds seq_len + 1
+    frames total (context + one target frame to predict) and seq_len actions between them.
+    """
     seq_len = cfg.data.seq_len
-    return seq_len * cfg.model.tokens_per_frame + max(seq_len - 1, 0)
+    total_frames = seq_len + 1
+    return total_frames * cfg.model.tokens_per_frame + seq_len
 
 
 class WorldModelEmbeddings(nn.Module):

@@ -54,7 +54,7 @@ def frame_prediction_loss(frame_logits, frame_tokens, ignore_index=IGNORE_INDEX)
             f'got logits {tuple(frame_logits.shape)} and targets {tuple(targets.shape)}'
         )
     if not mask.any():
-        raise ValueError('No frame-token targets were selected; use seq_len >= 2')
+        raise ValueError('No frame-token targets were selected; use seq_len >= 1')
 
     loss = F.cross_entropy(
         frame_logits.reshape(-1, frame_logits.size(-1)),
