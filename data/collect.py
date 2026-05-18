@@ -100,14 +100,19 @@ def run_episode(
         agent = models["deterministic" if ep_policy.endswith("deterministic") else "noisy"]
         agent["stack"].clear()
 
-    frames, actions, rewards, dones = [], [], [], []
+    def new_segment():
+        return {"frames": [], "actions": [], "rewards": [], "dones": []}
+
+    segments = [new_segment()]
     needs_fire = fire_on_reset and not prefire
-    ep_return = 0.0
+    prev_lives = env.unwrapped.ale.lives()
+    total_steps = 0
     collector_truncated = False
     terminated = truncated = False
 
     while not (terminated or truncated):
         raw = env.render()
+        cur = segments[-1]
 
         if needs_fire:
             if agent is not None:
@@ -125,28 +130,53 @@ def run_episode(
             action = int(np.asarray(pred).reshape(-1)[0])
 
         _, reward, terminated, truncated, _ = env.step(action)
-        frames.append(preprocess_frame(raw, frame_size))
-        actions.append(action)
-        rewards.append(reward)
-        dones.append(terminated or truncated)
-        ep_return += float(reward)
+        cur["frames"].append(preprocess_frame(raw, frame_size))
+        cur["actions"].append(action)
+        cur["rewards"].append(reward)
+        total_steps += 1
 
-        if max_steps and len(frames) >= max_steps and not (terminated or truncated):
+        cur_lives = env.unwrapped.ale.lives()
+        life_lost = cur_lives < prev_lives and not (terminated or truncated)
+        prev_lives = cur_lives
+        hit_max = max_steps and total_steps >= max_steps and not (terminated or truncated)
+        if hit_max:
             collector_truncated = True
-            dones[-1] = True
+
+        segment_done = life_lost or terminated or truncated or hit_max
+        cur["dones"].append(segment_done)
+
+        if segment_done and not (terminated or truncated or hit_max):
+            # life lost mid-game: FIRE to spawn the next ball, then open a new segment.
+            # Fire twice in case sticky-actions (p=0.25) drop the first FIRE.
+            if action_ids["fire"] is not None:
+                for _ in range(2):
+                    _, _, term, trunc, _ = env.step(action_ids["fire"])
+                    if term or trunc:
+                        terminated, truncated = term, trunc
+                        break
+            segments.append(new_segment())
+
+        if hit_max:
             break
 
-    return {
-        "frames": np.asarray(frames, dtype=np.uint8),
-        "actions": np.asarray(actions, dtype=np.int32),
-        "rewards": np.asarray(rewards, dtype=np.float32),
-        "dones": np.asarray(dones, dtype=bool),
-        "return": ep_return,
-        "policy": ep_policy,
-        "noop_start_steps": noop_steps,
-        "prefire_after_noop_start": prefire,
-        "collector_truncated": collector_truncated,
-    }
+    if not segments[-1]["frames"]:
+        segments.pop()
+
+    return [
+        {
+            "frames": np.asarray(seg["frames"], dtype=np.uint8),
+            "actions": np.asarray(seg["actions"], dtype=np.int32),
+            "rewards": np.asarray(seg["rewards"], dtype=np.float32),
+            "dones": np.asarray(seg["dones"], dtype=bool),
+            "return": float(np.sum(seg["rewards"])),
+            "policy": ep_policy,
+            "life_index": i,
+            "noop_start_steps": noop_steps if i == 0 else 0,
+            "prefire_after_noop_start": prefire if i == 0 else False,
+            "collector_truncated": collector_truncated and i == len(segments) - 1,
+        }
+        for i, seg in enumerate(segments)
+    ]
 
 
 def write_episode(group, data):
@@ -155,6 +185,7 @@ def write_episode(group, data):
     group.attrs["collector_truncated"] = data["collector_truncated"]
     group.attrs["noop_start_steps"] = data["noop_start_steps"]
     group.attrs["prefire_after_noop_start"] = data["prefire_after_noop_start"]
+    group.attrs["life_index"] = data["life_index"]
     group.create_dataset("frames", data=data["frames"])
     group.create_dataset("actions", data=data["actions"])
     group.create_dataset("rewards", data=data["rewards"])
@@ -180,26 +211,28 @@ def _run_worker(args):
 
     with h5py.File(shard_path, "w") as f:
         for i, (ep_idx, ep_policy) in enumerate(assignments):
-            data = run_episode(
+            segments = run_episode(
                 env, action_ids, rng, ep_policy, models,
                 epsilon=epsilon, frame_size=frame_size,
                 fire_on_reset=fire_on_reset, noop_max=noop_max,
                 max_steps=max_steps, seed=seed + ep_idx,
             )
-            if data["return"] == 0.0:
+            for data in segments:
+                tag = f"ep={ep_idx} life={data['life_index']} policy={ep_policy}"
+                if data["return"] == 0.0:
+                    print(
+                        f"[worker {worker_id}] {i + 1}/{len(assignments)} "
+                        f"{tag} DROPPED (return=0, length={len(data['frames'])})",
+                        flush=True,
+                    )
+                    continue
+                group_name = f"episode_{ep_idx:04d}_life_{data['life_index']:02d}"
+                write_episode(f.create_group(group_name), data)
                 print(
                     f"[worker {worker_id}] {i + 1}/{len(assignments)} "
-                    f"ep={ep_idx} policy={ep_policy} DROPPED (return=0, length={len(data['frames'])})",
+                    f"{tag} return={data['return']:.1f} length={len(data['frames'])}",
                     flush=True,
                 )
-                continue
-            write_episode(f.create_group(f"episode_{ep_idx:04d}"), data)
-            print(
-                f"[worker {worker_id}] {i + 1}/{len(assignments)} "
-                f"ep={ep_idx} policy={ep_policy} "
-                f"return={data['return']:.1f} length={len(data['frames'])}",
-                flush=True,
-            )
 
     env.close()
     return shard_path
@@ -207,7 +240,7 @@ def _run_worker(args):
 
 def collect_episodes(
     game="ALE/Breakout-v5",
-    n_episodes=300,
+    n_episodes=250,
     output_path="data/breakout.h5",
     policy="mixed",
     epsilon=0.05,
@@ -305,7 +338,7 @@ def collect_episodes(
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--game", default="ALE/Breakout-v5")
-    p.add_argument("--n-episodes", type=int, default=300)
+    p.add_argument("--n-episodes", type=int, default=250)
     p.add_argument("--output-path", default="data/breakout.h5")
     p.add_argument("--policy", choices=["random", "pretrained", "mixed"], default="mixed")
     p.add_argument("--epsilon", type=float, default=0.05,

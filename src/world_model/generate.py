@@ -145,7 +145,7 @@ def log_rollout(imagined, future_frames, run, fps):
     """imagined, future_frames: (B, T, C, H, W) in [0,1]. Logs each sample side-by-side as a wandb video."""
     side_by_side = torch.cat([imagined, future_frames], dim=-1)  # (B, T, C, H, 2W)
     videos = (side_by_side.clamp(0, 1) * 255).to(torch.uint8).cpu().numpy()
-    run.log({'rollout': [wandb.Video(v, fps=fps) for v in videos]})
+    run.log({'rollout': [wandb.Video(v, fps=fps, format='gif') for v in videos]})
 
 
 @hydra.main(version_base=None, config_path='../../configs', config_name='world_model')
