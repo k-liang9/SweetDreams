@@ -42,7 +42,7 @@ def parse_args():
         )
     )
     parser.add_argument('--h5-path', default='data/breakout.h5')
-    parser.add_argument('--checkpoint-path', default=None)
+    parser.add_argument('--checkpoint-path', default='weights/tokenizer.pt')
     parser.add_argument('--output-dir', default='diagnostics/vqvae_ball')
     parser.add_argument('--device', default='auto')
     parser.add_argument('--num-examples', type=int, default=8)

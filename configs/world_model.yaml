@@ -48,8 +48,9 @@ generate:
   tag: rollout
   temperature: 1.0
   top_k: 50
-  rollout_steps: 64
+  rollout_steps: 256
   greedy: false
   batch_size: 32
   num_samples: 32
+  decode_chunk: 8
   fps: 15

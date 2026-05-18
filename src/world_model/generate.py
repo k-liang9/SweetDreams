@@ -11,6 +11,7 @@ for path in (ROOT, SRC):
 
 import hydra
 import torch
+import tqdm
 import wandb
 from hydra.utils import to_absolute_path
 from omegaconf import DictConfig, OmegaConf
@@ -30,6 +31,7 @@ class WorldModelEnv:
         self.temp = cfg.generate.temperature
         self.top_k = cfg.generate.top_k
         self.greedy = cfg.generate.greedy
+        self.decode_chunk = cfg.generate.decode_chunk
         N = cfg.model.tokens_per_frame
         B = cfg.generate.batch_size
         max_T = cfg.data.seq_len
@@ -98,12 +100,17 @@ class WorldModelEnv:
 
     @torch.no_grad()
     def decode(self, frame_tokens):
-        """(B, T, N) frame tokens -> (B, T, C, H, W) pixels."""
+        """(B, T, N) frame tokens -> (B, T, C, H, W) pixels. Chunked along T so the VQ-VAE decoder processes B*decode_chunk frames at a time."""
         B, T, N = frame_tokens.shape
         H = W = int(round(N ** 0.5))
         if H * W != N:
             raise ValueError(f'tokens_per_frame={N} is not a perfect square')
-        return self.tokenizer.decode_from_indices(frame_tokens.reshape(B, T, H, W))
+        indices = frame_tokens.reshape(B, T, H, W)
+        pieces = [
+            self.tokenizer.decode_from_indices(indices[:, t:t + self.decode_chunk])
+            for t in range(0, T, self.decode_chunk)
+        ]
+        return torch.cat(pieces, dim=1)
 
 
 def load(cfg, device):
@@ -137,7 +144,8 @@ def split_batch(frames, actions, seq_len, rollout_steps):
 @torch.no_grad()
 def rollout(env, prompt_frames, prompt_actions, rollout_actions):
     env.reset(prompt_frames, prompt_actions)
-    frames = [env.step(rollout_actions[:, t]) for t in range(rollout_actions.shape[1])]
+    T = rollout_actions.shape[1]
+    frames = [env.step(rollout_actions[:, t]) for t in tqdm.trange(T, desc='rollout')]
     return torch.stack(frames, dim=1)  # (B, rollout_steps, N)
 
 
@@ -169,7 +177,7 @@ def main(cfg: DictConfig):
         name=f'{cfg.exp.run_name}-rollout',
         group=str(cfg.exp.group),
         entity=str(cfg.exp.entity),
-        tags=[str(cfg.exp.tag), str(cfg.generate.tag)],
+        tags=[str(cfg.generate.tag)],
         config=OmegaConf.to_container(cfg, resolve=True),
     ) as run:
         log_rollout(imagined, future_frames, run, fps=cfg.generate.fps)
