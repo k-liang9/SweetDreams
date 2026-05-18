@@ -24,6 +24,8 @@ cd "$WORKTREE"
 
 MASTER_PORT=$((10000 + SLURM_JOB_ID % 50000))
 
+export NCCL_P2P_DISABLE=1
+
 torchrun \
     --master_port="$MASTER_PORT" \
     --nproc_per_node=2 \

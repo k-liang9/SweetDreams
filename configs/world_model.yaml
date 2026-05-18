@@ -22,7 +22,7 @@ train:
   grad_clip_norm: 1.0
   val_every_steps: 400
   log_every_steps: 20
-  tokenize_batch_size: 64
+  tokenize_batch_size: 128
 
 optimizer:
   type: adamw
