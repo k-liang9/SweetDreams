@@ -27,7 +27,7 @@ train:
 
 optimizer:
   type: adamw
-  lr: 0.00042
+  lr: 0.0014
   weight_decay: 0.01
 
 scheduler:

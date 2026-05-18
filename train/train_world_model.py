@@ -163,8 +163,7 @@ def precompute_tokens(tokenizer, h5_path, device, cfg):
             # Probe one frame to learn token shape.
             probe = torch.from_numpy(ep['frames'][:1]).to(device=device, dtype=torch.float32).div_(255.0)
             probe = probe.permute(0, 3, 1, 2).contiguous()
-            with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=device.type == 'cuda'):
-                probe_tokens = tokenizer.encode(probe)
+            probe_tokens = tokenizer.encode(probe)
             H, W = probe_tokens.shape[-2:]
 
             if 'tokens' in ep:
@@ -175,8 +174,7 @@ def precompute_tokens(tokenizer, h5_path, device, cfg):
                 end = min(start + batch_size, n)
                 frames = torch.from_numpy(ep['frames'][start:end]).to(device=device, dtype=torch.float32).div_(255.0)
                 frames = frames.permute(0, 3, 1, 2).contiguous()
-                with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=device.type == 'cuda'):
-                    indices = tokenizer.encode(frames)
+                indices = tokenizer.encode(frames)
                 tokens_ds[start:end] = indices.to(torch.int32).cpu().numpy()
 
     if is_main_process():
