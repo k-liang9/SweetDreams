@@ -1,5 +1,7 @@
-# Rollout / inference for the world model. No KV cache yet (transformer.py
-# TODO), so each generated token re-runs the full forward pass.
+# Rollout / inference for the world model
+
+# TODO:
+# 1. kv cache
 from pathlib import Path
 import sys
 
@@ -26,8 +28,8 @@ class WorldModelEnv:
     """Gym-style wrapper holding the sliding (frame_tokens, actions) window for autoregressive rollouts."""
 
     def __init__(self, world_model, tokenizer, device, cfg):
-        self.tokenizer = tokenizer.to(device)
-        self.world_model = world_model.to(device)
+        self.tokenizer = tokenizer.to(device).bfloat16()
+        self.world_model = world_model.to(device).bfloat16()
         self.device = device
         self.temp = cfg.generate.temperature
         self.top_k = cfg.generate.top_k
@@ -48,7 +50,7 @@ class WorldModelEnv:
         Lays out buffers so the last frame slot and last action slot are empty,
         ready for step() to fill on the next call.
         """
-        prompt_tokens = self.tokenizer.encode(prompt_frames).flatten(2).contiguous()  # (B, seq_len, N)
+        prompt_tokens = self.tokenizer.encode(prompt_frames.bfloat16()).flatten(2).contiguous()  # (B, seq_len, N)
 
         self.frame_tokens.zero_()
         self.actions.zero_()
@@ -96,7 +98,7 @@ class WorldModelEnv:
             v, _ = torch.topk(logits, k=self.top_k, dim=-1)
             threshold = v[..., -1:]
             logits = torch.where(logits < threshold, torch.full_like(logits, float('-inf')), logits)
-        probs = torch.softmax(logits, dim=-1)
+        probs = torch.softmax(logits.float(), dim=-1)
         return torch.multinomial(probs, num_samples=1).squeeze(-1)
 
     @torch.no_grad()
@@ -147,8 +149,8 @@ def rollout(env, prompt_frames, prompt_actions, rollout_actions):
     env.reset(prompt_frames, prompt_actions)
     T = rollout_actions.shape[1]
 
-    # one cycle of 1 wait + 9 warmup + 10 active = 20 steps
-    sched = schedule(wait=1, warmup=9, active=10, repeat=1)
+    # one cycle of 1 wait + 1 warmup + 3 active = 20 steps
+    sched = schedule(wait=1, warmup=1, active=3, repeat=1)
 
     def on_trace_ready(p):
         print(p.key_averages(group_by_input_shape=True).table(
@@ -162,7 +164,8 @@ def rollout(env, prompt_frames, prompt_actions, rollout_actions):
         schedule=sched,
         on_trace_ready=on_trace_ready,
         record_shapes=True,
-        profile_memory=False,
+        profile_memory=True,
+        with_flops=True,
         with_stack=False,
     ) as prof:
         for t in tqdm.trange(T, desc='rollout'):
