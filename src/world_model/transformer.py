@@ -12,13 +12,12 @@ class Transformer(nn.Module):
     def __init__(self, cfg):
         super().__init__()
         self.cfg = cfg
-        self.dropout = nn.Dropout(cfg.model.dropout)
         self.blocks = nn.ModuleList([Block(cfg) for _ in range(cfg.model.num_layers)])
         self.ln_f = nn.LayerNorm(cfg.model.d_model)
 
     def forward(self, sequences):
-        x = self.dropout(sequences)
-        for i, block in enumerate(self.blocks):
+        x = sequences
+        for block in self.blocks:
             x = block(x)
 
         x = self.ln_f(x)

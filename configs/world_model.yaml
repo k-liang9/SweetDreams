@@ -3,7 +3,7 @@ exp:
   project: sweetdreams
   group: world_model
   run_name: world_model
-  tag: world_model
+  tag: "world model"
 
 data:
   h5_path: data/breakout.h5
@@ -28,8 +28,8 @@ train:
 
 optimizer:
   type: adamw
-  lr: 0.0014
-  weight_decay: 0.01
+  lr: 0.0003
+  weight_decay: 0.05
 
 scheduler:
   type: none
@@ -41,7 +41,7 @@ model:
   d_model: 256
   num_layers: 6
   num_heads: 4
-  dropout: 0.1
+  dropout: 0.2
   attention: causal
 
 generate:

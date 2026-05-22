@@ -14,7 +14,7 @@ set -euo pipefail
 eval "$(conda shell.bash hook)"
 conda activate sweetdreams
 
-RUN_SHA=b1d93ed25e159f38aae88c6c2ab19318ed65bb68
+RUN_SHA=f47101d49d567d29e21be99df90836553c82ef33
 REPO_ROOT=$(git rev-parse --show-toplevel)
 WORKTREE=$REPO_ROOT/../SweetDreams-runs/$SLURM_JOB_ID
 if [ ! -d "$WORKTREE" ]; then
@@ -31,5 +31,6 @@ torchrun \
     --nproc_per_node=2 \
     train/train_world_model.py \
     exp.run_name="world model" \
+    train.epochs=50 \
     data.h5_path="$REPO_ROOT/data/breakout.h5" \
     checkpoints.tokenizer="$REPO_ROOT/weights/tokenizer.pt"
