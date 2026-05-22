@@ -17,10 +17,20 @@ class WorldModelEmbeddings(nn.Module):
         super().__init__()
         self.d_model = cfg.model.d_model
         self.max_seq_len = compute_max_seq_len(cfg)
+        N = cfg.model.tokens_per_frame
         self.frame_token_embedding = nn.Embedding(cfg.model.num_frame_tokens, self.d_model)
         self.action_embedding = nn.Embedding(cfg.model.num_actions, self.d_model)
+        self.type_embedding = nn.Embedding(2, self.d_model)
         self.dropout = nn.Dropout(cfg.model.dropout)
-    
+
+        # 0 = frame token, 1 = action token. Interleave pattern is fixed by N:
+        # within each block of N+1 positions, the last position is an action.
+        T_max = cfg.data.seq_len + 1
+        type_ids = torch.zeros(self.max_seq_len, dtype=torch.long)
+        action_positions = torch.arange(1, T_max) * (N + 1) - 1
+        type_ids[action_positions] = 1
+        self.register_buffer('type_ids', type_ids, persistent=False)
+
     def forward(self, frame_tokens, actions):
         """
         frame_tokens: (B, T, N)
@@ -34,22 +44,24 @@ class WorldModelEmbeddings(nn.Module):
             raise ValueError(
                 f'Expected actions with shape {(B, T - 1)}, got {tuple(actions.shape)}'
             )
-        
+
         frame_x = self.frame_token_embedding(frame_tokens)  # (B,T,N,d)
         action_x = self.action_embedding(actions)           # (B,T-1,d)
-        
+
         chunks = []
         for t in range(T):
             chunks.append(frame_x[:, t])                    # (B,N,d)
             if t < T-1:
                 chunks.append(action_x[:, t:t + 1])         # (B,1,d)
-        
+
         x = torch.cat(chunks, dim=1)                        # (B,S,d)
-        if x.size(1) > self.max_seq_len:
+        S = x.size(1)
+        if S > self.max_seq_len:
             raise ValueError(
-                f'Interleaved sequence length {x.size(1)} exceeds max_seq_len {self.max_seq_len}'
+                f'Interleaved sequence length {S} exceeds max_seq_len {self.max_seq_len}'
             )
 
+        x = x + self.type_embedding(self.type_ids[:S])      # (S,d) broadcasts over B
         return self.dropout(x)
 
 class RoPE(nn.Module):
