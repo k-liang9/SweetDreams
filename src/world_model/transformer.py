@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from world_model.embeddings import compute_max_seq_len
+from world_model.embeddings import compute_max_seq_len, RoPE
 
 class Transformer(nn.Module):
     def __init__(self, cfg):
@@ -59,6 +59,7 @@ class SelfAttention(nn.Module):
         self.Wk = nn.Linear(D, D)
         self.Wq = nn.Linear(D, D)
         self.Wv = nn.Linear(D, D)
+        self.rope = RoPE(cfg)
 
         self.resid_dropout = nn.Dropout(cfg.model.dropout)
         self.proj = nn.Linear(D, D)
@@ -79,6 +80,9 @@ class SelfAttention(nn.Module):
         Q = self.Wq(x).view(B, T, self.num_heads, self.head_dim).transpose(1, 2) # (B,T,C) -> (B,T,nh,hs) -> (B,nh,T,hs)
         K = self.Wk(x).view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
         V = self.Wv(x).view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
+
+        Q = self.rope(Q)
+        K = self.rope(K)
 
         dropout_p = self.cfg.model.dropout if self.training else 0.0
         if self.attention_mode == 'causal':

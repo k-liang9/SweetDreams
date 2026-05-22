@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 
-
 def compute_max_seq_len(cfg):
     """Interleaved length of one training sequence; rollout uses a sliding window of the same size.
 
@@ -20,7 +19,6 @@ class WorldModelEmbeddings(nn.Module):
         self.max_seq_len = compute_max_seq_len(cfg)
         self.frame_token_embedding = nn.Embedding(cfg.model.num_frame_tokens, self.d_model)
         self.action_embedding = nn.Embedding(cfg.model.num_actions, self.d_model)
-        self.position_embedding = nn.Embedding(self.max_seq_len, self.d_model)
         self.dropout = nn.Dropout(cfg.model.dropout)
     
     def forward(self, frame_tokens, actions):
@@ -51,9 +49,56 @@ class WorldModelEmbeddings(nn.Module):
             raise ValueError(
                 f'Interleaved sequence length {x.size(1)} exceeds max_seq_len {self.max_seq_len}'
             )
-        
-        positions = torch.arange(x.size(1), device=x.device)
-        pos_x = self.position_embedding(positions).unsqueeze(0) # (1,S,d)
-        
-        x = x + pos_x
+
         return self.dropout(x)
+
+class RoPE(nn.Module):
+    """Rotary positional embedding (half-rotated convention).
+
+    Pair j of dimensions (x[..., j], x[..., j + head_dim/2]) of a token at
+    position m is rotated by angle m * theta_j, where theta_j = base^(-2j/head_dim).
+    Apply to Q and K only, never V.
+    """
+
+    def __init__(self, cfg, base: float = 10000.0):
+        super().__init__()
+        head_dim = cfg.model.d_model // cfg.model.num_heads
+        max_seq_len = compute_max_seq_len(cfg)
+        assert head_dim % 2 == 0, f'head_dim must be even, got {head_dim}'
+        self.head_dim = head_dim
+        self.max_seq_len = max_seq_len
+
+        # theta_j for j = 0..head_dim/2 - 1
+        inv_freq = 1.0 / (base ** (torch.arange(0, head_dim, 2, dtype=torch.float32) / head_dim))
+        self.register_buffer('inv_freq', inv_freq, persistent=False)
+        positions = torch.arange(max_seq_len, dtype=torch.float32)
+        angles = torch.outer(positions, inv_freq)  # (max_seq_len, head_dim/2)
+
+        self.register_buffer('cos', angles.cos(), persistent=False)
+        self.register_buffer('sin', angles.sin(), persistent=False)
+
+    def _get_cos_sin(self, start: int, end: int, device) -> tuple[torch.Tensor, torch.Tensor]:
+        """Fetch cos/sin for positions [start, end); compute on the fly past max_seq_len."""
+        if end <= self.max_seq_len:
+            return self.cos[start:end], self.sin[start:end]
+        positions = torch.arange(start, end, device=device, dtype=self.inv_freq.dtype)
+        angles = torch.outer(positions, self.inv_freq)
+        return angles.cos(), angles.sin()
+
+    def forward(self, x: torch.Tensor, start: int = 0) -> torch.Tensor:
+        """
+        x:     (B, num_heads, T, head_dim) — Q or K after the multi-head split.
+        start: absolute position of x[..., 0, :]. 0 for training/prefill,
+               cache_len for single-token decode.
+        """
+        _, _, T, D = x.shape
+        assert D == self.head_dim, f'expected head_dim={self.head_dim}, got {D}'
+
+        cos, sin = self._get_cos_sin(start, start + T, x.device)
+        cos = cos.to(x.dtype)[None, None, :, :]
+        sin = sin.to(x.dtype)[None, None, :, :]
+
+        x1, x2 = x[..., : D // 2], x[..., D // 2 :]
+        out1 = x1 * cos - x2 * sin
+        out2 = x1 * sin + x2 * cos
+        return torch.cat([out1, out2], dim=-1)
