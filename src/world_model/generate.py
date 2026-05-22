@@ -1,7 +1,9 @@
 # Rollout / inference for the world model
 
 # TODO:
+# 0. RoPE
 # 1. kv cache
+# 2/3. flash decoding & custom kernel
 from pathlib import Path
 import sys
 
