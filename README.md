@@ -142,18 +142,22 @@ stream.
         ▼                                   ▼
    ┌─────────────────────────────────────────────────┐
    │  Embeddings                                     │
-   │    frame_token  : Embedding(512, d=256)         │
-   │    action       : Embedding(num_actions, 256)   │
-   │    positional   : Embedding(max_seq_len, 256)   │
+   │    frame_token  : Embedding(512, d=288)         │
+   │    action       : Embedding(num_actions, d)     │
+   │    spatial      : Embedding(N+1, d)             │
+   │                    slots 0..N-1 = grid position │
+   │                    slot   N     = action marker │
    │                                                 │
    │  interleave: [f_0(N), a_0, f_1(N), a_1, ...]    │
-   │   length S = (T) · N + (T-1)                    │
+   │   length S = T · N + (T-1)                      │
    └─────────────────────────────────────────────────┘
         │
         ▼
    ┌─────────────────────────────────────────────────┐
    │  6 × TransformerBlock                           │
-   │    LN → SelfAttention(causal, 4 heads) → +res   │
+   │    LN → SelfAttention(causal, 4 heads)          │
+   │         + RoPE on Q,K (temporal axis only)      │
+   │         → +res                                  │
    │    LN → MLP (d → 4d → d, GELU) → +res           │
    │  LayerNorm                                      │
    └─────────────────────────────────────────────────┘
@@ -167,8 +171,29 @@ stream.
    frame_logits over the 512-entry codebook, per position
 ```
 
+#### Positional encoding (hybrid: learned spatial + RoPE temporal)
+
+Position is encoded along two independent axes, each with the tool that fits its
+constraints:
+
+- **Spatial** — a learned `Embedding(N+1, d)` added at the input. Slots `0..N-1`
+  correspond to the `N = H·W = 64` grid positions within a frame; slot `N` is a
+  shared marker added to every action token. The 8×8 grid is fixed and
+  bounded, so learned embeddings can freely capture 2D structure that a
+  flattened 1D RoPE would misrepresent as a 1D linear ordering.
+- **Temporal** — 1D RoPE applied to Q and K inside attention (never V). All
+  `N+1` tokens in one block (the 64 frame tokens of `f_t` plus the `a_t` that
+  follows) share a single time index `t`. Same-frame attention (Δt = 0) gets
+  RoPE identity → pure content dot, so within-frame spatial relationships flow
+  entirely through the learned spatial embedding. Cross-frame attention
+  encodes the integer temporal offset. RoPE is closed-form and KV-cache
+  friendly — no embedding-table ceiling on rollout horizon.
+
+See [src/world_model/RoPE.md](src/world_model/RoPE.md) for the RoPE math
+derivation and a discussion of axial vs hybrid designs.
+
 Config (see [configs/world_model.yaml](configs/world_model.yaml)):
-`d_model = 256`, `num_layers = 6`, `num_heads = 4`, `dropout = 0.1`,
+`d_model = 288`, `num_layers = 6`, `num_heads = 4`, `dropout = 0.1`,
 `tokens_per_frame = 64`, `seq_len = 16` past frames.
 
 Rollout (see [src/world_model/generate.py](src/world_model/generate.py)) keeps a

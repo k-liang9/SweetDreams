@@ -20,16 +20,15 @@ class WorldModelEmbeddings(nn.Module):
         N = cfg.model.tokens_per_frame
         self.frame_token_embedding = nn.Embedding(cfg.model.num_frame_tokens, self.d_model)
         self.action_embedding = nn.Embedding(cfg.model.num_actions, self.d_model)
-        self.type_embedding = nn.Embedding(2, self.d_model)
+        # Spatial slots: 0..N-1 for the H*W grid positions within a frame, N for action tokens.
+        self.spatial_embedding = nn.Embedding(N + 1, self.d_model)
         self.dropout = nn.Dropout(cfg.model.dropout)
 
-        # 0 = frame token, 1 = action token. Interleave pattern is fixed by N:
-        # within each block of N+1 positions, the last position is an action.
-        T_max = cfg.data.seq_len + 1
-        type_ids = torch.zeros(self.max_seq_len, dtype=torch.long)
-        action_positions = torch.arange(1, T_max) * (N + 1) - 1
-        type_ids[action_positions] = 1
-        self.register_buffer('type_ids', type_ids, persistent=False)
+        # spatial_ids[p] = p % (N+1):
+        #   p % (N+1) ∈ 0..N-1 → frame token at that spatial slot
+        #   p % (N+1) == N     → action token
+        spatial_ids = torch.arange(self.max_seq_len) % (N + 1)
+        self.register_buffer('spatial_ids', spatial_ids, persistent=False)
 
     def forward(self, frame_tokens, actions):
         """
@@ -61,40 +60,56 @@ class WorldModelEmbeddings(nn.Module):
                 f'Interleaved sequence length {S} exceeds max_seq_len {self.max_seq_len}'
             )
 
-        x = x + self.type_embedding(self.type_ids[:S])      # (S,d) broadcasts over B
+        x = x + self.spatial_embedding(self.spatial_ids[:S])  # (S,d) broadcasts over B
         return self.dropout(x)
 
 class RoPE(nn.Module):
-    """Rotary positional embedding (half-rotated convention).
+    """Rotary positional embedding on the temporal axis (half-rotated convention).
 
-    Pair j of dimensions (x[..., j], x[..., j + head_dim/2]) of a token at
-    position m is rotated by angle m * theta_j, where theta_j = base^(-2j/head_dim).
+    All N+1 tokens in one block (N frame tokens + 1 action token) share a single
+    time index t. Pair j of dimensions (x[..., j], x[..., j + head_dim/2]) is
+    rotated by angle t * theta_j, where theta_j = base^(-2j/head_dim).
     Apply to Q and K only, never V.
+
+    Same-frame attention (Δt = 0) gets RoPE identity → pure content dot.
+    Cross-frame attention encodes the temporal offset.
     """
 
     def __init__(self, cfg, base: float = 10000.0):
         super().__init__()
         head_dim = cfg.model.d_model // cfg.model.num_heads
         max_seq_len = compute_max_seq_len(cfg)
+        N = cfg.model.tokens_per_frame
+        T_max = cfg.data.seq_len + 1
         assert head_dim % 2 == 0, f'head_dim must be even, got {head_dim}'
         self.head_dim = head_dim
         self.max_seq_len = max_seq_len
+        self.block_size = N + 1
 
         # theta_j for j = 0..head_dim/2 - 1
         inv_freq = 1.0 / (base ** (torch.arange(0, head_dim, 2, dtype=torch.float32) / head_dim))
         self.register_buffer('inv_freq', inv_freq, persistent=False)
-        positions = torch.arange(max_seq_len, dtype=torch.float32)
-        angles = torch.outer(positions, inv_freq)  # (max_seq_len, head_dim/2)
 
-        self.register_buffer('cos', angles.cos(), persistent=False)
-        self.register_buffer('sin', angles.sin(), persistent=False)
+        # cos/sin tables indexed by TIME (frame index), size T_max (= 17 by default)
+        # rather than by absolute position (size max_seq_len = 1104).
+        times = torch.arange(T_max, dtype=torch.float32)
+        angles = torch.outer(times, inv_freq)  # (T_max, head_dim/2)
+        self.register_buffer('cos_time', angles.cos(), persistent=False)
+        self.register_buffer('sin_time', angles.sin(), persistent=False)
+
+        # time_ids[p] = p // (N+1) — every token in block t shares time t.
+        time_ids = torch.arange(max_seq_len) // self.block_size
+        self.register_buffer('time_ids', time_ids, persistent=False)
 
     def _get_cos_sin(self, start: int, end: int, device) -> tuple[torch.Tensor, torch.Tensor]:
-        """Fetch cos/sin for positions [start, end); compute on the fly past max_seq_len."""
+        """Fetch cos/sin for absolute positions [start, end), looked up via time index."""
         if end <= self.max_seq_len:
-            return self.cos[start:end], self.sin[start:end]
-        positions = torch.arange(start, end, device=device, dtype=self.inv_freq.dtype)
-        angles = torch.outer(positions, self.inv_freq)
+            t = self.time_ids[start:end]
+            return self.cos_time[t], self.sin_time[t]
+        # Past the precomputed range (e.g. indefinite-horizon rollout): compute on the fly.
+        positions = torch.arange(start, end, device=device, dtype=torch.long)
+        t = (positions // self.block_size).to(self.inv_freq.dtype)
+        angles = torch.outer(t, self.inv_freq)
         return angles.cos(), angles.sin()
 
     def forward(self, x: torch.Tensor, start: int = 0) -> torch.Tensor:

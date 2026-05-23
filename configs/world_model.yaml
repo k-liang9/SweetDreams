@@ -17,7 +17,7 @@ checkpoints:
 
 train:
   seed: 0
-  epochs: 15
+  epochs: 20
   batch_size: 32
   num_workers: 8
   device: auto
@@ -28,8 +28,8 @@ train:
 
 optimizer:
   type: adamw
-  lr: 0.0003
-  weight_decay: 0.05
+  lr: 0.0014
+  weight_decay: 0.01
 
 scheduler:
   type: none
@@ -38,10 +38,10 @@ model:
   num_frame_tokens: 512
   num_actions: 4
   tokens_per_frame: 64
-  d_model: 256
+  d_model: 288
   num_layers: 6
   num_heads: 4
-  dropout: 0.2
+  dropout: 0.1
   attention: causal
 
 generate:
