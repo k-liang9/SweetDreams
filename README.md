@@ -144,9 +144,9 @@ stream.
    │  Embeddings                                     │
    │    frame_token  : Embedding(512, d=288)         │
    │    action       : Embedding(num_actions, d)     │
-   │    spatial      : Embedding(N+1, d)             │
-   │                    slots 0..N-1 = grid position │
-   │                    slot   N     = action marker │
+   │    type         : Embedding(2, d)               │
+   │                    slot 0 = frame token         │
+   │                    slot 1 = action token        │
    │                                                 │
    │  interleave: [f_0(N), a_0, f_1(N), a_1, ...]    │
    │   length S = T · N + (T-1)                      │
@@ -156,7 +156,7 @@ stream.
    ┌─────────────────────────────────────────────────┐
    │  6 × TransformerBlock                           │
    │    LN → SelfAttention(causal, 4 heads)          │
-   │         + RoPE on Q,K (temporal axis only)      │
+   │         + 3D RoPE on Q,K (row, col, time axes)  │
    │         → +res                                  │
    │    LN → MLP (d → 4d → d, GELU) → +res           │
    │  LayerNorm                                      │
@@ -171,30 +171,44 @@ stream.
    frame_logits over the 512-entry codebook, per position
 ```
 
-#### Positional encoding (hybrid: learned spatial + RoPE temporal)
+#### Positional encoding (3D axial RoPE)
 
-Position is encoded along two independent axes, each with the tool that fits its
-constraints:
+All positional information is encoded by RoPE applied to Q and K inside
+attention; no learned position vectors are added to the input. The head
+dimension is split into three equal slices, each rotated by one coordinate
+axis:
 
-- **Spatial** — a learned `Embedding(N+1, d)` added at the input. Slots `0..N-1`
-  correspond to the `N = H·W = 64` grid positions within a frame; slot `N` is a
-  shared marker added to every action token. The 8×8 grid is fixed and
-  bounded, so learned embeddings can freely capture 2D structure that a
-  flattened 1D RoPE would misrepresent as a 1D linear ordering.
-- **Temporal** — 1D RoPE applied to Q and K inside attention (never V). All
-  `N+1` tokens in one block (the 64 frame tokens of `f_t` plus the `a_t` that
-  follows) share a single time index `t`. Same-frame attention (Δt = 0) gets
-  RoPE identity → pure content dot, so within-frame spatial relationships flow
-  entirely through the learned spatial embedding. Cross-frame attention
-  encodes the integer temporal offset. RoPE is closed-form and KV-cache
-  friendly — no embedding-table ceiling on rollout horizon.
+| slice | dims | rotates by | pairs |
+|---|---|---|---|
+| 0 | `0 .. D/3`    | row  (`0..H-1`, sentinel `H` for actions) | `D/6` |
+| 1 | `D/3 .. 2D/3` | col  (`0..W-1`, sentinel `W` for actions) | `D/6` |
+| 2 | `2D/3 .. D`   | time (`0..T_max-1`, one shared value per block) | `D/6` |
+
+For frame token at within-block index `k`: position `(row = k // W, col = k % W, time = t)`.
+For action token (last in block): sentinel position `(row = H, col = W, time = t)` — one
+past the grid in each spatial axis, so action vs frame tokens have rotations
+the model can learn to distinguish geometrically.
+
+Because RoPE's relative-offset property holds independently on each axis,
+attention's `q · k` decomposes into three terms over `(Δrow, Δcol, Δt)`. This
+gives the model clean separate signals for "same patch across time"
+(`Δrow = Δcol = 0, Δt > 0` → only the temporal slice rotates) and "neighbor
+patches in the same frame" (`Δt = 0`, spatial slices rotate).
+
+A small learned `type_embedding(2, d)` is added at the input as a binary
+frame-vs-action marker. The two content embedding tables
+(`frame_token_embedding`, `action_embedding`) are already disjoint at init, but
+the type embedding guards against the two drifting into overlapping subspaces
+during training. `head_dim` must be divisible by 6 (three axes × even pair
+count).
 
 See [src/world_model/RoPE.md](src/world_model/RoPE.md) for the RoPE math
-derivation and a discussion of axial vs hybrid designs.
+derivation (1D, axial, and 3D extension).
 
 Config (see [configs/world_model.yaml](configs/world_model.yaml)):
-`d_model = 288`, `num_layers = 6`, `num_heads = 4`, `dropout = 0.1`,
-`tokens_per_frame = 64`, `seq_len = 16` past frames.
+`d_model = 288`, `num_layers = 6`, `num_heads = 4`, `head_dim = 72` (= 12 pairs
+per axis), `dropout = 0.1`, `tokens_per_frame = 64`, `seq_len = 16` past
+frames.
 
 Rollout (see [src/world_model/generate.py](src/world_model/generate.py)) keeps a
 sliding `(seq_len + 1)`-frame window. For each new frame, the 64 tokens are

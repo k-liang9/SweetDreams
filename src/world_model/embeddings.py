@@ -20,15 +20,16 @@ class WorldModelEmbeddings(nn.Module):
         N = cfg.model.tokens_per_frame
         self.frame_token_embedding = nn.Embedding(cfg.model.num_frame_tokens, self.d_model)
         self.action_embedding = nn.Embedding(cfg.model.num_actions, self.d_model)
-        # Spatial slots: 0..N-1 for the H*W grid positions within a frame, N for action tokens.
-        self.spatial_embedding = nn.Embedding(N + 1, self.d_model)
+        # 3D RoPE encodes spatial (row, col) and temporal positions inside attention,
+        # so no learned position vectors are added here. A small binary type marker
+        # (0=frame, 1=action) guards against the two content tables drifting into
+        # overlapping subspaces during training.
+        self.type_embedding = nn.Embedding(2, self.d_model)
         self.dropout = nn.Dropout(cfg.model.dropout)
 
-        # spatial_ids[p] = p % (N+1):
-        #   p % (N+1) ∈ 0..N-1 → frame token at that spatial slot
-        #   p % (N+1) == N     → action token
-        spatial_ids = torch.arange(self.max_seq_len) % (N + 1)
-        self.register_buffer('spatial_ids', spatial_ids, persistent=False)
+        # type_ids[p] = 1 if position p is the action slot of its block, else 0.
+        type_ids = ((torch.arange(self.max_seq_len) % (N + 1)) == N).long()
+        self.register_buffer('type_ids', type_ids, persistent=False)
 
     def forward(self, frame_tokens, actions):
         """
@@ -60,57 +61,105 @@ class WorldModelEmbeddings(nn.Module):
                 f'Interleaved sequence length {S} exceeds max_seq_len {self.max_seq_len}'
             )
 
-        x = x + self.spatial_embedding(self.spatial_ids[:S])  # (S,d) broadcasts over B
+        x = x + self.type_embedding(self.type_ids[:S])      # (S,d) broadcasts over B
         return self.dropout(x)
 
+
 class RoPE(nn.Module):
-    """Rotary positional embedding on the temporal axis (half-rotated convention).
+    """3D axial Rotary Position Embedding over (row, col, time).
 
-    All N+1 tokens in one block (N frame tokens + 1 action token) share a single
-    time index t. Pair j of dimensions (x[..., j], x[..., j + head_dim/2]) is
-    rotated by angle t * theta_j, where theta_j = base^(-2j/head_dim).
+    head_dim is split into three equal slices of size D/3. Each slice applies
+    standard 1D RoPE on D/6 pairs, using one of the three coordinate axes:
+      slice 0 (dims 0..D/3)     rotates by row
+      slice 1 (dims D/3..2D/3)  rotates by col
+      slice 2 (dims 2D/3..D)    rotates by time
+
+    Position assignment for the interleaved (frame_tokens, action) sequence:
+      Frame token at within-block index k:  (row=k//W, col=k%W, time=t)
+      Action token (last in block):         (row=H,    col=W,    time=t)
+    The action sentinel (H, W) is one past the grid in each spatial axis, so
+    action vs frame is distinguishable from the rotation alone.
+
     Apply to Q and K only, never V.
-
-    Same-frame attention (Δt = 0) gets RoPE identity → pure content dot.
-    Cross-frame attention encodes the temporal offset.
     """
 
     def __init__(self, cfg, base: float = 10000.0):
         super().__init__()
         head_dim = cfg.model.d_model // cfg.model.num_heads
-        max_seq_len = compute_max_seq_len(cfg)
+        assert head_dim % 6 == 0, (
+            f'head_dim must be divisible by 6 for 3D RoPE (split into 3 axes, each with '
+            f'even pair count); got head_dim={head_dim}'
+        )
         N = cfg.model.tokens_per_frame
+        H = W = int(round(N ** 0.5))
+        assert H * W == N, f'tokens_per_frame={N} must be a perfect square for 3D RoPE'
         T_max = cfg.data.seq_len + 1
-        assert head_dim % 2 == 0, f'head_dim must be even, got {head_dim}'
+        max_seq_len = compute_max_seq_len(cfg)
+
         self.head_dim = head_dim
+        self.axis_dim = head_dim // 3
         self.max_seq_len = max_seq_len
         self.block_size = N + 1
+        self.H = H
+        self.W = W
 
-        # theta_j for j = 0..head_dim/2 - 1
-        inv_freq = 1.0 / (base ** (torch.arange(0, head_dim, 2, dtype=torch.float32) / head_dim))
+        # Per-axis frequencies: theta_j = base^(-2j/axis_dim), j = 0..axis_dim/2 - 1
+        axis_dim = self.axis_dim
+        inv_freq = 1.0 / (base ** (torch.arange(0, axis_dim, 2, dtype=torch.float32) / axis_dim))
         self.register_buffer('inv_freq', inv_freq, persistent=False)
 
-        # cos/sin tables indexed by TIME (frame index), size T_max (= 17 by default)
-        # rather than by absolute position (size max_seq_len = 1104).
+        # cos/sin tables per axis, indexed by axis position.
+        # Row/col include the sentinel value (H, W), so sizes are H+1 and W+1.
+        rows = torch.arange(H + 1, dtype=torch.float32)
+        cols = torch.arange(W + 1, dtype=torch.float32)
         times = torch.arange(T_max, dtype=torch.float32)
-        angles = torch.outer(times, inv_freq)  # (T_max, head_dim/2)
-        self.register_buffer('cos_time', angles.cos(), persistent=False)
-        self.register_buffer('sin_time', angles.sin(), persistent=False)
+        self.register_buffer('cos_row', torch.outer(rows, inv_freq).cos(), persistent=False)
+        self.register_buffer('sin_row', torch.outer(rows, inv_freq).sin(), persistent=False)
+        self.register_buffer('cos_col', torch.outer(cols, inv_freq).cos(), persistent=False)
+        self.register_buffer('sin_col', torch.outer(cols, inv_freq).sin(), persistent=False)
+        self.register_buffer('cos_time', torch.outer(times, inv_freq).cos(), persistent=False)
+        self.register_buffer('sin_time', torch.outer(times, inv_freq).sin(), persistent=False)
 
-        # time_ids[p] = p // (N+1) — every token in block t shares time t.
-        time_ids = torch.arange(max_seq_len) // self.block_size
+        # Per-absolute-position (row, col, time) lookup buffers.
+        positions = torch.arange(max_seq_len)
+        time_ids = positions // self.block_size
+        within = positions % self.block_size
+        is_action = within == N
+        row_ids = torch.where(is_action, torch.full_like(within, H), within // W)
+        col_ids = torch.where(is_action, torch.full_like(within, W), within % W)
+        self.register_buffer('row_ids', row_ids, persistent=False)
+        self.register_buffer('col_ids', col_ids, persistent=False)
         self.register_buffer('time_ids', time_ids, persistent=False)
 
-    def _get_cos_sin(self, start: int, end: int, device) -> tuple[torch.Tensor, torch.Tensor]:
-        """Fetch cos/sin for absolute positions [start, end), looked up via time index."""
+    def _coords(self, start: int, end: int, device):
+        """Return (row_ids, col_ids, time_ids) for absolute positions [start, end)."""
         if end <= self.max_seq_len:
-            t = self.time_ids[start:end]
-            return self.cos_time[t], self.sin_time[t]
-        # Past the precomputed range (e.g. indefinite-horizon rollout): compute on the fly.
+            return self.row_ids[start:end], self.col_ids[start:end], self.time_ids[start:end]
+        # Past the precomputed range — compute on the fly (indefinite-horizon decode).
         positions = torch.arange(start, end, device=device, dtype=torch.long)
-        t = (positions // self.block_size).to(self.inv_freq.dtype)
-        angles = torch.outer(t, self.inv_freq)
+        time_ids = positions // self.block_size
+        within = positions % self.block_size
+        N = self.block_size - 1
+        is_action = within == N
+        row_ids = torch.where(is_action, torch.full_like(within, self.H), within // self.W)
+        col_ids = torch.where(is_action, torch.full_like(within, self.W), within % self.W)
+        return row_ids, col_ids, time_ids
+
+    def _axis_cos_sin(self, ids, cos_table, sin_table):
+        """Look up cos/sin from a precomputed axis table; fall back to on-the-fly compute if needed."""
+        if ids.numel() == 0 or int(ids.max()) < cos_table.size(0):
+            return cos_table[ids], sin_table[ids]
+        angles = torch.outer(ids.to(self.inv_freq.dtype), self.inv_freq)
         return angles.cos(), angles.sin()
+
+    def _rotate(self, x_slice, cos, sin):
+        D = x_slice.shape[-1]
+        cos = cos.to(x_slice.dtype)[None, None, :, :]
+        sin = sin.to(x_slice.dtype)[None, None, :, :]
+        x1, x2 = x_slice[..., : D // 2], x_slice[..., D // 2 :]
+        out1 = x1 * cos - x2 * sin
+        out2 = x1 * sin + x2 * cos
+        return torch.cat([out1, out2], dim=-1)
 
     def forward(self, x: torch.Tensor, start: int = 0) -> torch.Tensor:
         """
@@ -121,11 +170,17 @@ class RoPE(nn.Module):
         _, _, T, D = x.shape
         assert D == self.head_dim, f'expected head_dim={self.head_dim}, got {D}'
 
-        cos, sin = self._get_cos_sin(start, start + T, x.device)
-        cos = cos.to(x.dtype)[None, None, :, :]
-        sin = sin.to(x.dtype)[None, None, :, :]
+        row_ids, col_ids, time_ids = self._coords(start, start + T, x.device)
+        cos_r, sin_r = self._axis_cos_sin(row_ids, self.cos_row, self.sin_row)
+        cos_c, sin_c = self._axis_cos_sin(col_ids, self.cos_col, self.sin_col)
+        cos_t, sin_t = self._axis_cos_sin(time_ids, self.cos_time, self.sin_time)
 
-        x1, x2 = x[..., : D // 2], x[..., D // 2 :]
-        out1 = x1 * cos - x2 * sin
-        out2 = x1 * sin + x2 * cos
-        return torch.cat([out1, out2], dim=-1)
+        A = self.axis_dim
+        x_row = x[..., : A]
+        x_col = x[..., A : 2 * A]
+        x_time = x[..., 2 * A : 3 * A]
+
+        out_row = self._rotate(x_row, cos_r, sin_r)
+        out_col = self._rotate(x_col, cos_c, sin_c)
+        out_time = self._rotate(x_time, cos_t, sin_t)
+        return torch.cat([out_row, out_col, out_time], dim=-1)
