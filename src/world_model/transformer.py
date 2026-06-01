@@ -15,10 +15,10 @@ class Transformer(nn.Module):
         self.blocks = nn.ModuleList([Block(cfg) for _ in range(cfg.model.num_layers)])
         self.ln_f = nn.LayerNorm(cfg.model.d_model)
 
-    def forward(self, sequences):
+    def forward(self, sequences, start=0, cache=None):
         x = sequences
-        for block in self.blocks:
-            x = block(x)
+        for i, block in enumerate(self.blocks):
+            x = block(x, start=start, cache=cache, layer_idx=i)
 
         x = self.ln_f(x)
         return x
@@ -37,9 +37,8 @@ class Block(nn.Module):
             nn.Dropout(cfg.model.dropout),
         )
 
-    # TODO: add kv
-    def forward(self, x):
-        x_attn = self.attn(self.ln1(x))
+    def forward(self, x, start=0, cache=None, layer_idx=None):
+        x_attn = self.attn(self.ln1(x), start=start, cache=cache, layer_idx=layer_idx)
         x = x + x_attn
         x = x + self.mlp(self.ln2(x))
         return x
@@ -72,19 +71,26 @@ class SelfAttention(nn.Module):
                 mask[start:end, start:end] = True
             self.register_buffer('mask', mask)
 
-    # TODO: add kv cache
-    def forward(self, x):
+    def forward(self, x, start=0, cache=None, layer_idx=None):
         B, T, C = x.size()
 
         Q = self.Wq(x).view(B, T, self.num_heads, self.head_dim).transpose(1, 2) # (B,T,C) -> (B,T,nh,hs) -> (B,nh,T,hs)
         K = self.Wk(x).view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
         V = self.Wv(x).view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
 
-        Q = self.rope(Q)
-        K = self.rope(K)
+        Q = self.rope(Q, start=start)
+        K = self.rope(K, start=start)
+
+        if cache is not None:
+            cache.append(layer_idx, K, V)
+            K, V = cache.read(layer_idx)
 
         dropout_p = self.cfg.model.dropout if self.training else 0.0
-        if self.attention_mode == 'causal':
+        if cache is not None:
+            # Q is a suffix of K (full match for prefill, single token for decode).
+            is_causal = (Q.shape[2] == K.shape[2])
+            y = F.scaled_dot_product_attention(Q, K, V, is_causal=is_causal, dropout_p=dropout_p)
+        elif self.attention_mode == 'causal':
             y = F.scaled_dot_product_attention(Q, K, V, is_causal=True, dropout_p=dropout_p)
         else:
             mask = self.mask[:T, :T].unsqueeze(0).unsqueeze(0)

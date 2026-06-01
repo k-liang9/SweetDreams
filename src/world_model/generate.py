@@ -24,10 +24,11 @@ from torch.utils.data import DataLoader
 
 from data import AtariEpisodeDataset
 from train.utils import get_device, load_tokenizer, load_world_model, move_to_device
+from world_model.kv_cache import KVCache
 
 
 class WorldModelEnv:
-    """Gym-style wrapper holding the sliding (frame_tokens, actions) window for autoregressive rollouts."""
+    """Gym-style wrapper driving a cached autoregressive rollout."""
 
     def __init__(self, world_model, tokenizer, device, cfg):
         self.tokenizer = tokenizer.to(device).bfloat16()
@@ -37,11 +38,11 @@ class WorldModelEnv:
         self.top_k = cfg.generate.top_k
         self.greedy = cfg.generate.greedy
         self.decode_chunk = cfg.generate.decode_chunk
-        N = cfg.model.tokens_per_frame
-        B = cfg.generate.batch_size
-        max_T = cfg.data.seq_len
-        self.frame_tokens = torch.zeros(B, max_T + 1, N, dtype=torch.long, device=device)
-        self.actions = torch.zeros(B, max_T, dtype=torch.long, device=device)
+        self.N = cfg.model.tokens_per_frame
+        self.B = cfg.generate.batch_size
+
+        self.cache = KVCache(cfg)
+        self.cache.allocate(dtype=torch.bfloat16, device=device)
 
     @torch.no_grad()
     def reset(self, prompt_frames, prompt_actions):
@@ -49,17 +50,12 @@ class WorldModelEnv:
         prompt_frames:  (B, seq_len, C, H, W)
         prompt_actions: (B, seq_len - 1)
 
-        Lays out buffers so the last frame slot and last action slot are empty,
-        ready for step() to fill on the next call.
+        Encodes the prompt and prefills the KV cache. After this call the cache
+        holds K/V for every prompt token at every layer.
         """
         prompt_tokens = self.tokenizer.encode(prompt_frames.bfloat16()).flatten(2).contiguous()  # (B, seq_len, N)
-
-        self.frame_tokens.zero_()
-        self.actions.zero_()
-
-        seq_len = self.actions.shape[1]
-        self.frame_tokens[:, :seq_len] = prompt_tokens
-        self.actions[:, :seq_len - 1] = prompt_actions
+        self.cache.reset()
+        self.world_model(prompt_tokens, prompt_actions, start=0, cache=self.cache)
 
     @torch.no_grad()
     def step(self, action):
@@ -67,31 +63,26 @@ class WorldModelEnv:
         action: (B,) — the action conditioning the next frame.
         returns: (B, N) — frame tokens for the newly generated frame.
         """
-        self.actions[:, -1] = action
+        new_frame = torch.empty(self.B, self.N, dtype=torch.long, device=self.device)
 
-        N = self.frame_tokens.shape[2]
-        for n in range(N):
-            self.frame_tokens[:, -1, n] = self._sample_token(n)
+        # injected action; logits at its position predict frame token 0
+        logits = self.world_model.forward_token(action, self.cache.length, self.cache)
+        new_frame[:, 0] = self._sample(logits)
 
-        generated = self.frame_tokens[:, -1].clone()
+        # frame token n's logits predict token n+1
+        for i in range(1, self.N):
+            logits = self.world_model.forward_token(new_frame[:, i - 1], self.cache.length, self.cache)
+            new_frame[:, i] = self._sample(logits)
 
-        self.frame_tokens = torch.roll(self.frame_tokens, shifts=-1, dims=1)
-        self.frame_tokens[:, -1] = 0
-        self.actions = torch.roll(self.actions, shifts=-1, dims=1)
-        self.actions[:, -1] = 0
+        # append the last frame token's K/V so the next step's injected action
+        # attends to full preceding context; logits are unused
+        _ = self.world_model.forward_token(new_frame[:, self.N - 1], self.cache.length, self.cache)
 
-        return generated
+        return new_frame
 
     @torch.no_grad()
-    def _sample_token(self, n):
-        """Logit at position seq_len*(N+1) + n - 1 predicts token n of the last frame."""
-        out = self.world_model(self.frame_tokens, self.actions)
-        logits = out['frame_logits']  # (B, S, V)
-        seq_len = self.actions.shape[1]
-        N = self.frame_tokens.shape[2]
-        pos = seq_len * (N + 1) + n - 1
-        logits = logits[:, pos]  # (B, V)
-
+    def _sample(self, logits):
+        """logits: (B, V) -> (B,) token ids."""
         if self.greedy:
             return logits.argmax(dim=-1)
         if self.temp != 1.0:

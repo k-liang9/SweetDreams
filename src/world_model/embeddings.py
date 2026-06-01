@@ -63,6 +63,25 @@ class WorldModelEmbeddings(nn.Module):
         x = x + self.spatial_embedding(self.spatial_ids[:S])  # (S,d) broadcasts over B
         return self.dropout(x)
 
+    def embed_token(self, token, position):
+        """Single-token embed for cached decode.
+
+        token:    (B,) — one token id.
+        position: int — absolute position in the interleaved sequence; determines
+                  spatial slot (= position mod (N+1)) and whether the token is
+                  a frame token (slot < N) or an action (slot == N).
+        Returns:  (B, 1, d_model).
+        """
+        block_size = self.spatial_embedding.num_embeddings  # = N + 1
+        slot = position % block_size
+        if slot == block_size - 1:
+            x = self.action_embedding(token)
+        else:
+            x = self.frame_token_embedding(token)
+        slot_id = torch.tensor(slot, device=token.device)
+        x = x + self.spatial_embedding(slot_id)
+        return self.dropout(x.unsqueeze(1))
+
 class RoPE(nn.Module):
     """Rotary positional embedding on the temporal axis (half-rotated convention).
 

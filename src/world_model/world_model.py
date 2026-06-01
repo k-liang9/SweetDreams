@@ -31,9 +31,15 @@ class WorldModel(nn.Module):
 
         self.apply(init_weights)
 
-    def forward(self, frame_tokens, actions, rewards=None, dones=None):
+    def forward(self, frame_tokens, actions, rewards=None, dones=None, start=0, cache=None):
         x = self.embeddings(frame_tokens, actions)
-        h = self.transformer(x)
+        h = self.transformer(x, start=start, cache=cache)
         frame_logits = self.frame_head(h)
 
         return {'frame_logits': frame_logits}
+
+    def forward_token(self, token, position, cache):
+        """Single-token cached decode. position = absolute position of this token."""
+        x = self.embeddings.embed_token(token, position)
+        h = self.transformer(x, start=position, cache=cache)
+        return self.frame_head(h[:, 0])  # (B, num_frame_tokens)
