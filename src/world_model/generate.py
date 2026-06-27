@@ -138,9 +138,13 @@ def split_batch(frames, actions, seq_len, rollout_steps):
 
 
 @torch.no_grad()
-def rollout(env, prompt_frames, prompt_actions, rollout_actions):
+def rollout(env, prompt_frames, prompt_actions, rollout_actions, profile_run=False):
     env.reset(prompt_frames, prompt_actions)
     T = rollout_actions.shape[1]
+
+    if not profile_run:
+        frames = [env.step(rollout_actions[:, t]) for t in tqdm.trange(T, desc='rollout')]
+        return torch.stack(frames, dim=1)  # (B, rollout_steps, N)
 
     # one cycle of 1 wait + 1 warmup + 3 active = 20 steps
     sched = schedule(wait=1, warmup=1, active=3, repeat=1)
@@ -189,7 +193,7 @@ def main(cfg: DictConfig):
         frames, actions, cfg.data.seq_len, cfg.generate.rollout_steps,
     )
 
-    generated = rollout(env, prompt_frames, prompt_actions, rollout_actions)
+    generated = rollout(env, prompt_frames, prompt_actions, rollout_actions, cfg.generate.profile)
     imagined = env.decode(generated)
 
     with wandb.init(
