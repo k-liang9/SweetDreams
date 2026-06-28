@@ -17,3 +17,4 @@ matplotlib
 lpips
 stable-baselines3
 huggingface_hub
+triton
